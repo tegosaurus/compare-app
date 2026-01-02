@@ -1,6 +1,14 @@
-// History.jsx 
+// History.jsx
+// Full file: branded History page + filters + shortlist/edit/delete modals
+// + "Thinking Space" button
+// + Deletes also remove from Thinking Space board storage
+//
+// Requires: react-router-dom (for navigation)
+// Add route elsewhere: <Route path="/thinking-space" element={<ThinkingSpace />} />
+// and create ThinkingSpace.jsx (I can paste it if you want)
 
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   History as HistoryIcon,
   Clock,
@@ -9,12 +17,17 @@ import {
   Plus,
   Pencil,
   Filter,
+  Brain,
 } from "lucide-react";
 
-const BRAND_BLUE_1 = "#2563EB"; // compare blue
-const BRAND_BLUE_2 = "#3B82F6"; // lighter compare blue
+const BRAND_BLUE_1 = "#2563EB";
+const BRAND_BLUE_2 = "#3B82F6";
+
+const BOARD_KEY = "thinking_board_v1";
+const BOARD_COLS = ["undecided", "analysis", "discard", "confirmed"];
 
 export default function History() {
+  const navigate = useNavigate();
   const [history, setHistory] = useState([]);
 
   // Filters
@@ -54,6 +67,24 @@ export default function History() {
     if (confirm("Are you sure you want to delete all history?")) {
       setHistory([]);
       localStorage.removeItem("compare_history");
+      // Optional: also clear thinking board
+      localStorage.removeItem(BOARD_KEY);
+    }
+  };
+
+  // Remove id from Thinking Space board
+  const removeFromThinkingBoard = (id) => {
+    const raw = localStorage.getItem(BOARD_KEY);
+    if (!raw) return;
+    try {
+      const board = JSON.parse(raw);
+      const next = {};
+      for (const col of BOARD_COLS) {
+        next[col] = (board?.[col] || []).filter((x) => x !== id);
+      }
+      localStorage.setItem(BOARD_KEY, JSON.stringify(next));
+    } catch {
+      // ignore
     }
   };
 
@@ -87,14 +118,20 @@ export default function History() {
 
   // Delete
   const confirmDelete = () => {
+    if (!deleteTarget) return;
+
+    // Remove from history
     persist(history.filter((h) => h.id !== deleteTarget.id));
+
+    // Remove from thinking board too
+    removeFromThinkingBoard(deleteTarget.id);
+
     setDeleteTarget(null);
   };
 
   // Filter + sort
   const filtered = useMemo(() => {
     const base = history.filter((i) => !filterShortlisted || i.shortlisted);
-
     const dir = starSort === "high" ? -1 : 1;
 
     return [...base].sort((a, b) => {
@@ -201,6 +238,18 @@ export default function History() {
         ))}
       </div>
 
+      {/* Thinking Space Button */}
+      <div style={thinkingSpaceWrap}>
+        <button
+          onClick={() => navigate("/thinking-space")}
+          style={thinkingBtn}
+        >
+          <Brain size={18} />
+          Thinking Space
+          <span style={{ opacity: 0.9, fontWeight: 900 }}>→</span>
+        </button>
+      </div>
+
       {/* Delete Modal */}
       {deleteTarget && (
         <Modal onClose={() => setDeleteTarget(null)}>
@@ -269,7 +318,7 @@ export default function History() {
 function BrandWordmark() {
   return (
     <div style={wordmark}>
-      <span style={wordmarkBlack}>Profile History</span>{" "}
+      <span style={wordmarkBlack}>Profile History</span>
     </div>
   );
 }
@@ -316,9 +365,7 @@ function HistoryCard({ item, onShortlist, onEdit, onDelete }) {
         </div>
 
         {/* Comment */}
-        {item.userComment && (
-          <div style={cardComment}>{item.userComment}</div>
-        )}
+        {item.userComment && <div style={cardComment}>{item.userComment}</div>}
       </div>
 
       {/* Actions */}
@@ -351,9 +398,7 @@ function IconBtn({ children, onClick, active, danger, title }) {
         height: 38,
         borderRadius: 10,
         border: `1px solid ${danger ? "#FEE2E2" : "#E5E7EB"}`,
-        background: active
-          ? "rgba(37, 99, 235, 0.08)"
-          : "white",
+        background: active ? "rgba(37, 99, 235, 0.08)" : "white",
         color: danger ? "#EF4444" : "#374151",
         cursor: "pointer",
         display: "grid",
@@ -385,8 +430,10 @@ const pageWrap = {
 };
 
 const brandHeaderWrap = {
-  background:
-    "#F9FAFB",
+  background: "#F9FAFB",
+  borderRadius: 18,
+  padding: 18,
+  border: "1px solid #E5E7EB",
 };
 
 const brandTitleRow = {
@@ -413,13 +460,6 @@ const wordmark = {
 
 const wordmarkBlack = {
   color: "#0B1220",
-};
-
-const wordmarkBlue = {
-  backgroundImage: `linear-gradient(90deg, ${BRAND_BLUE_1}, ${BRAND_BLUE_2})`,
-  WebkitBackgroundClip: "text",
-  backgroundClip: "text",
-  color: "transparent",
 };
 
 const pill = {
@@ -535,7 +575,8 @@ const cardList = {
 
 const card = {
   padding: 18,
-  background: "linear-gradient(180deg, rgba(37, 99, 235, 0.08) 0%, rgba(37, 99, 235, 0.00) 70%)",
+  background:
+    "linear-gradient(180deg, rgba(37, 99, 235, 0.08) 0%, rgba(37, 99, 235, 0.00) 70%)",
   borderRadius: 14,
   border: "0.5px solid #E5E7EB",
   display: "flex",
@@ -594,11 +635,43 @@ const cardComment = {
   marginTop: 10,
   fontSize: 13,
   fontStyle: "italic",
-  background: "#white",
+  background: "#FFFFFF",
   padding: 10,
   borderRadius: 10,
   color: "#374151",
   wordBreak: "break-word",
+  border: "1px solid rgba(0,0,0,0.04)",
+};
+
+const thinkingSpaceWrap = {
+  marginTop: 26,
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  gap: 10,
+};
+
+const thinkingBtn = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 10,
+  padding: "12px 18px",
+  borderRadius: 14,
+  border: "1px solid rgba(37, 99, 235, 0.25)",
+  background: `linear-gradient(90deg, ${BRAND_BLUE_1}, ${BRAND_BLUE_2})`,
+  color: "white",
+  fontWeight: 900,
+  cursor: "pointer",
+  boxShadow: "0 10px 25px rgba(37, 99, 235, 0.25)",
+  minWidth: 220,
+  justifyContent: "center",
+};
+
+const thinkingHint = {
+  fontSize: 13,
+  color: "#6B7280",
+  textAlign: "center",
+  maxWidth: 720,
 };
 
 const modalOverlay = {

@@ -5,6 +5,7 @@ import Home from './pages/Home';
 import GenerateReport from './pages/GenerateReport';
 import History from './pages/History';
 import Analyze from './pages/Analyze';
+import ThinkingSpace from './pages/Thinkingspace';
 
 const queryClient = new QueryClient();
 
@@ -21,6 +22,7 @@ function App() {
             <Route path="generate" element={<GenerateReport />} />
             <Route path="history" element={<History />} />
             <Route path="analyze" element={<Analyze />} />
+            <Route path="/thinking-space" element={<ThinkingSpace />} />
           </Route>
         </Routes>
       </BrowserRouter>

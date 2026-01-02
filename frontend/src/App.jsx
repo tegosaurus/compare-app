@@ -6,6 +6,8 @@ import GenerateReport from './pages/GenerateReport';
 import History from './pages/History';
 import Analyze from './pages/Analyze';
 import ThinkingSpace from './pages/Thinkingspace';
+import UploadPage from './pages/Upload';
+
 
 const queryClient = new QueryClient();
 
@@ -23,6 +25,8 @@ function App() {
             <Route path="history" element={<History />} />
             <Route path="analyze" element={<Analyze />} />
             <Route path="/thinking-space" element={<ThinkingSpace />} />
+            <Route path="upload" element={<UploadPage />} />
+
           </Route>
         </Routes>
       </BrowserRouter>

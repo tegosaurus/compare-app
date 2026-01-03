@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 
+const ADMIN_PASSWORD = "MDS10"; //password for now
+
 /* ---------------- Password Modal ---------------- */
 function PasswordModal({ open, title, subtitle, error, onConfirm, onCancel }) {
   const [password, setPassword] = useState("");
@@ -53,7 +55,6 @@ function PasswordModal({ open, title, subtitle, error, onConfirm, onCancel }) {
     </div>
   );
 }
-
 
 /* ---------------- List Type Modal ---------------- */
 function ListTypeModal({ open, value, onChange, onCancel }) {
@@ -119,14 +120,19 @@ export default function UploadPage() {
     resetFlow();
   }
 
-  //  This should later call Supabase Edge Function i dont know how to do this yet
+    // (replace with Supabase Edge Function verification once figured out)
   function handlePasswordConfirm(password) {
-    // TEMP: frontend success (replace with Supabase call)
     if (!password) {
       setPasswordError("Password required.");
       return;
     }
 
+    if (password !== ADMIN_PASSWORD) {
+      setPasswordError("Incorrect password.");
+      return;
+    }
+
+    setPasswordError("");
     setPasswordOpen(false);
     setListTypeOpen(true);
   }
@@ -171,8 +177,7 @@ export default function UploadPage() {
           <div>
             <div className="label">Upload</div>
             <h1 className="pageTitle">Faculty Quality Upload</h1>
-            <div className="pageSub">
-            </div>
+            <div className="pageSub"></div>
           </div>
         </div>
 

@@ -1,10 +1,9 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pandas as pd
 import math
 
-# Import our new lightweight logic
 from logic import extract_author_id, load_or_fetch_author, evaluate_author_data_headless
 from database import update_publication_venues
 
@@ -24,7 +23,7 @@ class AnalyzeRequest(BaseModel):
     url: str
     is_cs_ai: bool = True
 
-# --- 3. HELPER: The "Sanitizer" ---
+# --- 3. HELPER ---
 def clean_nans(value):
     """
     Recursively finds NaN (Not a Number) or Infinity in dictionaries/lists
@@ -41,7 +40,7 @@ def clean_nans(value):
 
 # --- 4. THE ANALYZE ENDPOINT ---
 @app.post("/analyze")
-async def analyze_researcher(request: AnalyzeRequest):
+async def analyze_researcher(request: AnalyzeRequest, background_tasks: BackgroundTasks):
     # A. Validate & Extract ID
     aid = extract_author_id(request.url)
     if not aid:
@@ -57,7 +56,7 @@ async def analyze_researcher(request: AnalyzeRequest):
     if not data or not data.get("publications"):
         raise HTTPException(status_code=404, detail="No publications found for this researcher.")
 
-    # C. Run Logic (Headless)
+    # C. Run Logic
     try:
         metrics, df = evaluate_author_data_headless(data, request.is_cs_ai)
     except Exception as e:
@@ -66,15 +65,13 @@ async def analyze_researcher(request: AnalyzeRequest):
 
     # D. Database Update
     try:
-        update_publication_venues(metrics["id"], df)
+        background_tasks.add_task(update_publication_venues, metrics["id"], df)
     except Exception as e:
         print(f"Database Update Error: {e}")
 
-    # E. Format Response (With Safety Net)
-    # 1. Clean the DataFrame (Pandas method)
+    # E. Format Response
     df_clean = df.where(pd.notnull(df), None)
     
-    # 2. Build the final response
     raw_response = {
         "status": "success",
         "profile": {
@@ -87,9 +84,8 @@ async def analyze_researcher(request: AnalyzeRequest):
         "papers": df_clean.to_dict(orient="records")
     }
 
-    # 3. Final Sanitize (Catches any remaining NaNs in 'metrics')
     return clean_nans(raw_response)
 
 @app.get("/")
 def home():
-    return {"message": "ComPARE Intelligence API is running."}
+    return {"message": "ComPARE API is running."}

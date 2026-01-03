@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { FileText, History, BarChart2 } from 'lucide-react';
+import { FileText, History, BarChart2, Upload } from 'lucide-react';
 
 export default function Layout() {
   const location = useLocation();
@@ -7,10 +7,10 @@ export default function Layout() {
   return (
     <div style={{ 
       minHeight: "100vh", 
-      backgroundColor: "#F9FAFB", // Light gray background for the whole app
+      backgroundColor: "#F9FAFB",
       display: "flex", 
       flexDirection: "column",
-      fontFamily: "'Inter', system-ui, -apple-system, sans-serif" // Cleaner font stack
+      fontFamily: "'Inter', system-ui, -apple-system, sans-serif"
     }}>
       
       {/* TOP NAVIGATION BAR - FULL WIDTH */}
@@ -24,7 +24,7 @@ export default function Layout() {
         position: "sticky", 
         top: 0, 
         zIndex: 100,
-        padding: "0 24px", // Side padding
+        padding: "0 24px",
         boxShadow: "0 1px 2px 0 rgba(0, 0, 0, 0.05)"
       }}>
         
@@ -44,19 +44,20 @@ export default function Layout() {
         
         {/* Navigation Links */}
         <nav style={{ display: "flex", gap: "8px" }}>
+          <NavItem to="/upload" icon={<Upload size={18} />} label="Upload" active={location.pathname === "/upload"} />
           <NavItem to="/generate" icon={<FileText size={18} />} label="Generate Report" active={location.pathname === "/generate"} />
           <NavItem to="/history" icon={<History size={18} />} label="History" active={location.pathname === "/history"} />
           <NavItem to="/analyze" icon={<BarChart2 size={18} />} label="Analyze" active={location.pathname === "/analyze"} />
         </nav>
       </div>
 
-      {/* MAIN CONTENT AREA - WIDE BUT CENTERED */}
+      {/* MAIN CONTENT AREA */}
       <div style={{ 
         flex: 1, 
         width: "100%", 
-        maxWidth: "1280px", // Wider standard for laptops
+        maxWidth: "1280px",
         margin: "0 auto", 
-        padding: "32px 24px" // Breathing room
+        padding: "32px 24px"
       }}>
         <Outlet />
       </div>

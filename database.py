@@ -3,6 +3,7 @@ from sqlalchemy import create_engine, Table, Column, Integer, Float, String, Tex
 from sqlalchemy.dialects.postgresql import JSONB, insert
 from dotenv import load_dotenv
 from datetime import datetime, timezone
+import pandas as pd
 
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -111,7 +112,7 @@ def save_author_profile(profile: dict):
                 "venue": pub.get("venue"),
                 "year": safe_int(pub.get("year")), 
                 "citations": safe_int(pub.get("citations")) or 0,
-                "author_pos": pub.get("author_position")
+                "author_pos": pub.get("author_pos")
             })
             
         if publication:
@@ -124,7 +125,7 @@ def load_author_profile(author_id: str):
         if not row: 
             return None
 
-        profile = dict(row._mapping)  # (? keep this way or not)
+        profile = dict(row._mapping) 
         profile["author_id"] = profile["id"]
 
         # if DB returns a naive datetime (no timezone), force it to UTC
@@ -140,6 +141,11 @@ def load_author_profile(author_id: str):
 def update_publication_venues(author_id: str, df):
     with engine.begin() as conn:
         for _, row in df.iterrows():
+
+            val_type = row.get("match_type")
+            if pd.isna(val_type):
+                val_type = row.get("venue_type")
+
             conn.execute(
                 publications.update()
                 .where(
@@ -147,7 +153,7 @@ def update_publication_venues(author_id: str, df):
                     (publications.c.title == row["title"])
                 )
                 .values(
-                    venue_type=row.get("match_type"),
+                    venue_type=val_type,
                     rank=row.get("rank"),
                     match_score=row.get("match_score"),
                     source=row.get("source")

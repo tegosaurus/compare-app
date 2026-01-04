@@ -75,7 +75,7 @@ def get_scholar_profile(author_id: str, max_pages: int = 50):
             profile["co_authors"] = [co["name"] for co in result.get("co_authors", [])]
 
         articles = result.get("articles", [])
-        if not articles:  # stop if no more articles
+        if not articles: 
             break
 
         for article in articles:
@@ -90,7 +90,7 @@ def get_scholar_profile(author_id: str, max_pages: int = 50):
                 "venue": article.get("publication"),
                 "year": article.get("year"),
                 "citations": article.get("cited_by", {}).get("value", 0),
-                "author_position": pos
+                "author_pos": pos
             })
 
         start += 20
@@ -102,4 +102,4 @@ def get_scholar_profile(author_id: str, max_pages: int = 50):
     print(f"saving {len(profile['publications'])} publications to supabase...")
     save_author_profile(profile)
     print("profile saved to database.")
-    return profile  
+    return profile

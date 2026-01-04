@@ -1,13 +1,24 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from pydantic import BaseModel
 import pandas as pd
 import math
 
 from logic import extract_author_id, load_or_fetch_author, evaluate_author_data_headless
-from database import update_publication_venues
+from database import update_publication_venues, init_db
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("Checking database tables...")
+    init_db()
+    print("Database ready.")
+    
+    yield  # app runs here
+    
+    print("Shutting down...")
+
+app = FastAPI(lifespan=lifespan)
 
 # --- 1. CORS SETUP ---
 app.add_middleware(

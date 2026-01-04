@@ -133,7 +133,16 @@ def load_author_profile(author_id: str):
             profile["last_scraped"] = profile["last_scraped"].replace(tzinfo=timezone.utc)
 
         # load publications
-        pubs = conn.execute(publications.select().where(publications.c.researcher_id == author_id)).fetchall()
+        # sort by year (newest), then citations (highest), then title (A-Z)
+        pubs = conn.execute(
+            publications.select()
+            .where(publications.c.researcher_id == author_id)
+            .order_by(
+                publications.c.year.desc().nulls_last(),
+                publications.c.citations.desc().nulls_last(),
+                publications.c.title.asc()
+            )
+        ).fetchall()
         profile["publications"] = [dict(p._mapping) for p in pubs]
 
         return profile

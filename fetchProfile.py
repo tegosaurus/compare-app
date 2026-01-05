@@ -1,8 +1,7 @@
 import os
 import serpapi
 from dotenv import load_dotenv
-from datetime import datetime
-from database import init_db, save_author_profile
+from database import save_author_profile
 from name_variations import name_variations
 
 load_dotenv()
@@ -44,7 +43,7 @@ def get_author_pos(authors: str, title: str, variations: list) -> str:
     if authors and "..." in authors:
         return f"{authors_list_count}+" 
         
-    return "?"
+    return "-"
 
 def get_scholar_profile(author_id: str, max_pages: int = 50):
     profile = {
@@ -58,6 +57,7 @@ def get_scholar_profile(author_id: str, max_pages: int = 50):
     }
 
     start = 0
+    # fetch all raw data from google scholar
     while True:
         result = client.search(
             engine="google_scholar_author",
@@ -75,7 +75,7 @@ def get_scholar_profile(author_id: str, max_pages: int = 50):
             profile["co_authors"] = [co["name"] for co in result.get("co_authors", [])]
 
         articles = result.get("articles", [])
-        if not articles:  # stop if no more articles
+        if not articles: 
             break
 
         for article in articles:
@@ -90,16 +90,12 @@ def get_scholar_profile(author_id: str, max_pages: int = 50):
                 "venue": article.get("publication"),
                 "year": article.get("year"),
                 "citations": article.get("cited_by", {}).get("value", 0),
-                "author_position": pos
+                "author_pos": pos
             })
 
         start += 20
         if start >= max_pages * 20:
             break
 
-    init_db()
-
-    print(f"saving {len(profile['publications'])} publications to supabase...")
     save_author_profile(profile)
-    print("profile saved to database.")
-    return profile  
+    return profile

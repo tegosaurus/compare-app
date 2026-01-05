@@ -20,7 +20,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# --- 1. CORS SETUP ---
+# --- CORS SETUP ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -29,12 +29,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- 2. DATA MODELS ---
+# --- DATA MODELS ---
 class AnalyzeRequest(BaseModel):
     url: str
     is_cs_ai: bool = True
+    forceRefresh: bool = False
 
-# --- 3. HELPER ---
+# --- HELPER ---
 def clean_nans(value):
     """
     Recursively finds NaN (Not a Number) or Infinity in dictionaries/lists
@@ -49,17 +50,17 @@ def clean_nans(value):
         return [clean_nans(v) for v in value]
     return value
 
-# --- 4. THE ANALYZE ENDPOINT ---
+# --- ANALYZE ENDPOINT ---
 @app.post("/analyze")
 async def analyze_researcher(request: AnalyzeRequest, background_tasks: BackgroundTasks):
-    # A. Validate & Extract ID
+    # validate & extract id
     aid = extract_author_id(request.url)
     if not aid:
         raise HTTPException(status_code=400, detail="Invalid Google Scholar URL")
 
-    # B. Fetch Data
+    # fetch data
     try:
-        data = load_or_fetch_author(aid)
+        data = load_or_fetch_author(aid, force_refresh=request.forceRefresh)
     except Exception as e:
         print(f"Scraping Error: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch researcher data.")
@@ -67,20 +68,19 @@ async def analyze_researcher(request: AnalyzeRequest, background_tasks: Backgrou
     if not data or not data.get("publications"):
         raise HTTPException(status_code=404, detail="No publications found for this researcher.")
 
-    # C. Run Logic
+    # run logic
     try:
         metrics, df = evaluate_author_data_headless(data, request.is_cs_ai)
     except Exception as e:
         print(f"Logic Error: {e}")
         raise HTTPException(status_code=500, detail=f"Error analyzing data: {str(e)}")
 
-    # D. Database Update
+    # database update
     try:
         background_tasks.add_task(update_publication_venues, metrics["id"], df)
     except Exception as e:
         print(f"Database Update Error: {e}")
 
-    # E. Format Response
     df_clean = df.where(pd.notnull(df), None)
     
     raw_response = {
@@ -89,7 +89,8 @@ async def analyze_researcher(request: AnalyzeRequest, background_tasks: Backgrou
             "name": metrics["name"],
             "id": metrics["id"],
             "academic_age": metrics["academic_age"],
-            "affiliations": data.get("affiliations")
+            "affiliations": data.get("affiliations"),
+            "last_updated": data.get("last_scraped")
         },
         "metrics": metrics,
         "papers": df_clean.to_dict(orient="records")

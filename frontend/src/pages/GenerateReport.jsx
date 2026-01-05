@@ -139,24 +139,28 @@ export default function GenerateReport() {
   };
 
   const handleConfirmSave = () => {
-    if (!reportData) return;
-    const history = JSON.parse(localStorage.getItem("compare_history") || "[]");
-    const existingIndex = history.findIndex(h => h.id === reportData.profile.id);
-    const entry = {
-        id: reportData.profile.id,
-        name: reportData.profile.name,
-        total_c: reportData.metrics.total_c,
-        h_index: reportData.metrics.h_index,
-        affiliations: reportData.profile.affiliations,
-        date: new Date().toISOString(),
-        userRating: rating,
-        userComment: comment
+      if (!reportData) return;
+      const history = JSON.parse(localStorage.getItem("compare_history") || "[]");
+      const existingIndex = history.findIndex(h => h.id === reportData.profile.id);
+      
+      // Include 'fullReport' which contains
+      const entry = {
+          id: reportData.profile.id,
+          name: reportData.profile.name,
+          total_c: reportData.metrics.total_c,
+          h_index: reportData.metrics.h_index,
+          affiliations: reportData.profile.affiliations,
+          date: new Date().toISOString(),
+          userRating: rating,
+          userComment: comment,
+          fullReport: reportData 
+      };
+
+      if (existingIndex > -1) { history[existingIndex] = entry; } else { history.unshift(entry); }
+      localStorage.setItem("compare_history", JSON.stringify(history));
+      setIsModalOpen(false);
+      setIsSaved(true);
     };
-    if (existingIndex > -1) { history[existingIndex] = entry; } else { history.unshift(entry); }
-    localStorage.setItem("compare_history", JSON.stringify(history));
-    setIsModalOpen(false);
-    setIsSaved(true);
-  };
 
   return (
     <div style={{ width: "100%", backgroundColor: "#F8FAFC", minHeight: "100vh", paddingBottom: "60px", fontFamily: "Inter, -apple-system, sans-serif" }}>

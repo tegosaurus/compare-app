@@ -1,15 +1,31 @@
 import { useEffect, useState } from "react";
 import { Star, Users, TrendingUp, FileText } from "lucide-react";
+import { useLocation } from "react-router-dom"; 
 
 export default function AnalyzeCompare() {
   const [history, setHistory] = useState([]);
   const [compare, setCompare] = useState([null, null]);
+  const location = useLocation(); 
 
   useEffect(() => {
     const saved = JSON.parse(localStorage.getItem("compare_history") || "[]");
     setHistory(saved);
-    setCompare([saved[0] || null, saved[1] || null]);
-  }, []);
+
+    // Check if we arrived here from the History page with a specific ID
+    if (location.state?.preSelectId) {
+       const target = saved.find(h => h.id === location.state.preSelectId);
+       if (target) {
+           // Set the selected card in the first slot, leave second empty
+           setCompare([target, null]);
+       } else {
+           // Default fallback
+           setCompare([saved[0] || null, saved[1] || null]);
+       }
+    } else {
+       // Standard default load
+       setCompare([saved[0] || null, saved[1] || null]);
+    }
+  }, [location.state]); // Re-run if location state changes
 
   const handleSelect = (index, id) => {
     const selected = history.find((h) => h.id === id) || null;
@@ -18,7 +34,7 @@ export default function AnalyzeCompare() {
     setCompare(next);
   };
 
-  return (
+return (
     <div style={page}>
       <h2 style={title}>Compare Authors</h2>
 
@@ -43,36 +59,56 @@ export default function AnalyzeCompare() {
 
       {/* Cards */}
       <div style={compareGrid}>
-        {compare.map((author, i) => (
-          <div key={i} style={heroCard}>
-            {author ? (
-              <>
-                <h3 style={name}>{author.name}</h3>
-                <div style={affiliation}>
-                  {author.affiliations || "No affiliation"}
-                </div>
+        {compare.map((author, i) => {
+            // Determine if we have the full report data available
+            const fullStats = author?.fullReport?.metrics;
 
-                <div style={metrics}>
-                  <Metric label="Total Citations" value={author.total_c} />
-                  <Metric label="H-Index" value={author.h_index} />
-                  <Metric label="Rating" value={author.userRating} />
-                  <Metric
-                    label="Comment"
-                    value={author.userComment || "—"}
-                    wide
-                  />
-                </div>
-              </>
-            ) : (
-              <div style={empty}>Select an author</div>
-            )}
-          </div>
-        ))}
+            return (
+              <div key={i} style={heroCard}>
+                {author ? (
+                  <>
+                    <h3 style={name}>{author.name}</h3>
+                    <div style={affiliation}>
+                      {author.affiliations || "No affiliation"}
+                    </div>
+
+                    <div style={metrics}>
+                      {/* Basic Metrics (Always available) */}
+                      <Metric label="Total Citations" value={author.total_c.toLocaleString()} />
+                      <Metric label="H-Index" value={author.h_index} />
+                      
+                      {/* Rich Metrics (Only if saved via new GenerateReport) */}
+                      {fullStats ? (
+                          <>
+                             <Metric label="i10-Index" value={fullStats.i10_index} />
+                             <Metric label="Total Papers" value={fullStats.total_p} />
+                             <Metric label="Recent Papers" value={fullStats.recent_p} />
+                             <Metric label="Cits/Paper" value={fullStats.cpp} />
+                          </>
+                      ) : (
+                          <div style={{gridColumn: "span 2", padding: 10, fontSize: 12, color: "#94A3B8", fontStyle: "italic"}}>
+                              Full analytics not found. Re-save this profile in Generate Report to see more.
+                          </div>
+                      )}
+
+                      <Metric label="My Rating" value={`${author.userRating} / 5`} />
+                      <Metric
+                        label="My Notes"
+                        value={author.userComment || "—"}
+                        wide
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <div style={empty}>Select an author</div>
+                )}
+              </div>
+            );
+        })}
       </div>
     </div>
   );
 }
-
 /* ---------------- STYLES ---------------- */
 
 const page = {

@@ -3,7 +3,6 @@ from sqlalchemy import create_engine, Table, Column, Integer, Float, String, Tex
 from sqlalchemy.dialects.postgresql import JSONB, insert
 from dotenv import load_dotenv
 from datetime import datetime, timezone
-import pandas as pd
 
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -112,7 +111,7 @@ def save_author_profile(profile: dict):
                 "venue": pub.get("venue"),
                 "year": safe_int(pub.get("year")), 
                 "citations": safe_int(pub.get("citations")) or 0,
-                "author_pos": pub.get("author_pos")
+                "author_pos": pub.get("author_position")
             })
             
         if publication:
@@ -125,7 +124,7 @@ def load_author_profile(author_id: str):
         if not row: 
             return None
 
-        profile = dict(row._mapping) 
+        profile = dict(row._mapping)  # (? keep this way or not)
         profile["author_id"] = profile["id"]
 
         # if DB returns a naive datetime (no timezone), force it to UTC
@@ -133,16 +132,7 @@ def load_author_profile(author_id: str):
             profile["last_scraped"] = profile["last_scraped"].replace(tzinfo=timezone.utc)
 
         # load publications
-        # sort by year (newest), then citations (highest), then title (A-Z)
-        pubs = conn.execute(
-            publications.select()
-            .where(publications.c.researcher_id == author_id)
-            .order_by(
-                publications.c.year.desc().nulls_last(),
-                publications.c.citations.desc().nulls_last(),
-                publications.c.title.asc()
-            )
-        ).fetchall()
+        pubs = conn.execute(publications.select().where(publications.c.researcher_id == author_id)).fetchall()
         profile["publications"] = [dict(p._mapping) for p in pubs]
 
         return profile
@@ -150,11 +140,6 @@ def load_author_profile(author_id: str):
 def update_publication_venues(author_id: str, df):
     with engine.begin() as conn:
         for _, row in df.iterrows():
-
-            val_type = row.get("match_type")
-            if pd.isna(val_type):
-                val_type = row.get("venue_type")
-
             conn.execute(
                 publications.update()
                 .where(
@@ -162,7 +147,7 @@ def update_publication_venues(author_id: str, df):
                     (publications.c.title == row["title"])
                 )
                 .values(
-                    venue_type=val_type,
+                    venue_type=row.get("match_type"),
                     rank=row.get("rank"),
                     match_score=row.get("match_score"),
                     source=row.get("source")

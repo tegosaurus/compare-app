@@ -279,20 +279,32 @@ def match_quality(venue: str, is_cs_ai=False):
 def evaluate_author_data_headless(data, cs_ai):
 
     df = pd.DataFrame(data["publications"])
+    
+    df["year"] = pd.to_numeric(df["year"], errors="coerce")
+    df["citations"] = pd.to_numeric(df["citations"], errors="coerce").fillna(0).astype(int)
+    
+    # --- OPTIMIZED Venue Matching ---
+    if "venue_type" not in df.columns: df["venue_type"] = None
+    if "rank" not in df.columns: df["rank"] = None
+    if "matched_title" not in df.columns: df["matched_title"] = None
+    if "match_score" not in df.columns: df["match_score"] = 0.0
+    if "source" not in df.columns: df["source"] = None
+        
+    needs_match_mask = (df["rank"].isna() | (df["rank"] == "-") | (df["venue_type"].isna()))
+    venues_to_match = df.loc[needs_match_mask, "venue"].dropna().unique().tolist()
+    
+    venue_cache = {}
+    
+    for venue in venues_to_match:
+        venue_cache[venue] = match_quality(venue, cs_ai)
+    
+    def merge_match(row):
+        if row["venue"] in venue_cache:
+            return venue_cache[row["venue"]]
+        return (row.get("venue_type"), row.get("matched_title"), row.get("rank"), row.get("match_score"), row.get("source"))
 
-    # --- 1. Basic Cleaning ---
-    df["year"] = pd.to_numeric(df.get("year"), errors="coerce")
-    df["citations"] = pd.to_numeric(df.get("citations"), errors="coerce").fillna(0).astype(int)
-
-    # --- 2. Venue Matching ---
-    venues = df["venue"].dropna()
-    venue_cache = {v: match_quality(v, cs_ai) for v in venues}
-
-    # Map every row's venue -> (match_type, matched_title, rank, match_score, source)
-    matched = df["venue"].map(venue_cache)
-
-    df[["venue_type", "matched_title", "rank", "match_score", "source"]] = matched.apply(
-        lambda x: pd.Series(x if isinstance(x, (tuple, list)) else (None, None, None, 0.0, None))
+    df[["venue_type", "matched_title", "rank", "match_score", "source"]] = df.apply(
+        lambda r: pd.Series(merge_match(r)), axis=1
     )
 
     # --- Calculate Academic Metrics ---

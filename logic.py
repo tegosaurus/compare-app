@@ -5,8 +5,7 @@ import collections
 from rapidfuzz import process, fuzz
 from datetime import datetime, timezone
 
-# Database & Fetch Logic
-from database import engine, load_author_profile, save_author_profile
+from database import engine, load_author_profile, save_author_profile, update_publication_venues
 from fetchProfile import get_scholar_profile
 
 def normalize_text(s: str) -> str:
@@ -22,7 +21,7 @@ def normalize_text(s: str) -> str:
 
 def get_rank_from_row(row):
     val = row.get("rank")
-    if pd.notna(val) and str(val).strip() not in ["", "-", "nan", "None"]:
+    if pd.notna(val) and str(val).strip() not in ["", "-", "NaN", "None"]:
         return str(val).strip()
     return "-"
 
@@ -64,32 +63,30 @@ def extract_top_keywords(df, top_n=5):
 print("Loading Quality Data...")
 journals, conferences = load_quality_data()
 
-def get_lookup_dicts(journals_df, conferences_df):
-    lookup = {}
+# def get_lookup_dicts(journals_df, conferences_df):
+#     lookup = {}
 
-    # Journals
-    if "Title_norm" in journals_df.columns:
-        for _, row in journals_df.iterrows():
-            norm = row["Title_norm"]
-            lookup[norm] = ("Journal", row["Title"], get_rank_from_row(row))
+#     # Journals
+#     if "Title_norm" in journals_df.columns:
+#         for _, row in journals_df.iterrows():
+#             norm = row["Title_norm"]
+#             lookup[norm] = ("Journal", row["Title"], get_rank_from_row(row))
 
-    # Conferences
-    if "Title_norm" in conferences_df.columns:
-        for _, row in conferences_df.iterrows():
-            norm = row["Title_norm"]
-            lookup[norm] = ("Conference", row["Title"], get_rank_from_row(row))
+#     # Conferences
+#     if "Title_norm" in conferences_df.columns:
+#         for _, row in conferences_df.iterrows():
+#             norm = row["Title_norm"]
+#             lookup[norm] = ("Conference", row["Title"], get_rank_from_row(row))
 
-    return lookup
+#     return lookup
 
-lookup_map = get_lookup_dicts(journals, conferences)
-
+# lookup_map = get_lookup_dicts(journals, conferences)
 
 def extract_author_id(url):
     if "scholar.google" not in url:
         return None
     match = re.search(r"user=([\w-]+)", url)
     return match.group(1) if match else None
-
 
 def load_or_fetch_author(author_id: str, refresh_days: int = 7, force_refresh: bool = False):
     # if NOT forcing refresh, try to load from db
@@ -277,37 +274,56 @@ def match_quality(venue: str, is_cs_ai=False):
     return (hint, None, "-", 0.0, "No match")
 
 def evaluate_author_data_headless(data, cs_ai):
-
     df = pd.DataFrame(data["publications"])
-    
-    df["year"] = pd.to_numeric(df["year"], errors="coerce")
-    df["citations"] = pd.to_numeric(df["citations"], errors="coerce").fillna(0).astype(int)
-    
-    # --- OPTIMIZED Venue Matching ---
-    if "venue_type" not in df.columns: df["venue_type"] = None
-    if "rank" not in df.columns: df["rank"] = None
-    if "matched_title" not in df.columns: df["matched_title"] = None
-    if "match_score" not in df.columns: df["match_score"] = 0.0
-    if "source" not in df.columns: df["source"] = None
-        
-    needs_match_mask = (df["rank"].isna() | (df["rank"] == "-") | (df["venue_type"].isna()))
-    venues_to_match = df.loc[needs_match_mask, "venue"].dropna().unique().tolist()
-    
-    venue_cache = {}
-    
-    for venue in venues_to_match:
-        venue_cache[venue] = match_quality(venue, cs_ai)
-    
-    def merge_match(row):
-        if row["venue"] in venue_cache:
-            return venue_cache[row["venue"]]
-        return (row.get("venue_type"), row.get("matched_title"), row.get("rank"), row.get("match_score"), row.get("source"))
 
-    df[["venue_type", "matched_title", "rank", "match_score", "source"]] = df.apply(
-        lambda r: pd.Series(merge_match(r)), axis=1
-    )
+    df["year"] = pd.to_numeric(df.get("year"), errors="coerce")
+    df["citations"] = pd.to_numeric(df.get("citations"), errors="coerce").fillna(0).astype(int)
+    
+    # see if rank column exists
+    if "rank" not in df.columns:
+        df["rank"] = None 
 
-    # --- Calculate Academic Metrics ---
+    # --- OPTIMIZED VENUE MATCHING (strict NULL/empty check) ---
+    
+    # match ONLY if rank is NULL/empty
+    # this automatically SKIPS strings like "NaN", "-", "N/A", "Q1", etc.
+    needs_match_mask = df["rank"].isna() | (df["rank"] == "")
+    
+    # get venues ONLY for empty rows
+    venues_to_check = df.loc[needs_match_mask, "venue"].dropna()
+    unique_venues_to_check = set(venues_to_check)
+    
+    # run matching logic ONLY on specific unknown venues
+    # (if all ranks are "-", "NaN", or "Q1", this runs 0 times = INSTANT)
+    venue_cache = {v: match_quality(v, cs_ai) for v in unique_venues_to_check}
+
+    # apply results back to df
+    if not venues_to_check.empty:
+        # map results
+        matched_results = df.loc[needs_match_mask, "venue"].map(venue_cache)
+
+        # expand tuple results into columns
+        new_data = matched_results.apply(
+            lambda x: pd.Series(x if isinstance(x, (tuple, list)) else (None, None, "-", 0.0, None))
+        )
+        new_data.columns = ["calc_type", "calc_title", "calc_rank", "calc_score", "calc_source"]
+
+        # update main df with new calculations
+        df.loc[needs_match_mask, "rank"] = new_data["calc_rank"]
+        df.loc[needs_match_mask, "venue_type"] = new_data["calc_type"]
+        df.loc[needs_match_mask, "matched_title"] = new_data["calc_title"]
+        df.loc[needs_match_mask, "match_score"] = new_data["calc_score"]
+        df.loc[needs_match_mask, "source"] = new_data["calc_source"]
+
+        # --- SAVE TO DATABASE ---
+        # save immediately so we never have to calculate these specific rows again
+        # this stops infinite loop of recalculation
+        try:
+            update_publication_venues(data["author_id"], df[needs_match_mask])
+        except Exception as e:
+            print(f"Warning: Could not save updates to DB: {e}")
+
+    # --- STANDARD METRICS CALCULATIONS ---
     citations = sorted(df["citations"].tolist(), reverse=True)
     h_index = sum(x >= i + 1 for i, x in enumerate(citations))
     i10_index = sum(x >= 10 for x in citations)
@@ -322,7 +338,7 @@ def evaluate_author_data_headless(data, cs_ai):
     academic_age = current_year - min_year if pd.notna(min_year) else 1
     if academic_age < 1: academic_age = 1
 
-    # --- Author Cleaning & Network Size ---
+    # --- AUTHOR CLEANING & NETWORK ---
     target_name_parts = data["name"].lower().split()
     target_last = target_name_parts[-1]
 
@@ -336,7 +352,7 @@ def evaluate_author_data_headless(data, cs_ai):
     unique_authors = {a for a in unique_authors if target_last not in a.lower()}
     network_size = len(unique_authors)
 
-    # --- Role Logic ---
+    # --- ROLE LOGIC ---
     def get_role(authors_str):
         if not authors_str: return "Unknown"
         parts_raw = [p.strip().lower() for p in str(authors_str).split(",")]
@@ -358,7 +374,6 @@ def evaluate_author_data_headless(data, cs_ai):
     lead_count = df[df["role"].isin(["Solo Author", "First Author"])].shape[0]
     leadership_score = round((lead_count / len(df)) * 100, 1) if len(df) > 0 else 0
 
-    # --- Recent & Impact Metrics ---
     recent_df = df[df["year"] >= (current_year - 5)]
     recent_p = len(recent_df)
     recent_c = recent_df["citations"].sum()

@@ -1,14 +1,13 @@
 import re
-import string
 import pandas as pd
+import string
 import collections
 from rapidfuzz import process, fuzz
 from datetime import datetime, timezone
 
+# Database & Fetch Logic
 from database import engine, load_author_profile, save_author_profile
 from fetchProfile import get_scholar_profile
-
-# --- GLOBAL HELPERS ---
 
 def normalize_text(s: str) -> str:
     if not isinstance(s, str): return ""
@@ -62,36 +61,35 @@ def extract_top_keywords(df, top_n=5):
 
     return [{"text": word, "count": count} for word, count in counts]
 
-# --- GLOBAL INITIALIZATION (runs once at startup) ---
-print("Loading Faculty Quality Data...")
+print("Loading Quality Data...")
 journals, conferences = load_quality_data()
 
 def get_lookup_dicts(journals_df, conferences_df):
     lookup = {}
-    
-    # process journals
+
+    # Journals
     if "Title_norm" in journals_df.columns:
         for _, row in journals_df.iterrows():
             norm = row["Title_norm"]
             lookup[norm] = ("Journal", row["Title"], get_rank_from_row(row))
-            
-    # process conferences
+
+    # Conferences
     if "Title_norm" in conferences_df.columns:
         for _, row in conferences_df.iterrows():
             norm = row["Title_norm"]
             lookup[norm] = ("Conference", row["Title"], get_rank_from_row(row))
-            
+
     return lookup
 
 lookup_map = get_lookup_dicts(journals, conferences)
 
 
-# --- CORE LOGIC FUNCTIONS ---
-
 def extract_author_id(url):
-    if "scholar.google" not in url: return None
+    if "scholar.google" not in url:
+        return None
     match = re.search(r"user=([\w-]+)", url)
     return match.group(1) if match else None
+
 
 def load_or_fetch_author(author_id: str, refresh_days: int = 7, force_refresh: bool = False):
     # if NOT forcing refresh, try to load from db
@@ -118,95 +116,183 @@ def load_or_fetch_author(author_id: str, refresh_days: int = 7, force_refresh: b
     return clean_profile
 
 def guesser(venue: str) -> str:
+    """
+    Guess if the venue is a conference or journal based on keywords and strong acronyms.
+    If a venue has keywords that definetly only belong to conferences then we set the conference_certainty = TRUE
+        - Goal here is to avoid false matches due to high token overlap with the journals quality data
+    Input: venue string
+    Return: "conference", "journal", or "unknown" and boolean for conference quality 
+    """
     v = venue.lower()
-    if any(k in v for k in ["conference", "conf.", "proc.", "proceedings", "workshop", "symposium", "neurips", "cvpr", "iccv", "icml"]): return "conference"
-    if any(k in v for k in ["journal", "transactions", "trans.", "letters", "magazine"]): return "journal"
-    return "unknown"
+    conf_keywords = [
+        "conference", "conf.", "workshop", "symposium", "proceedings",
+        "meeting", "colloquium", "seminar", "summit", "annual"
+    ]
+    journ_keywords = [
+        "journal", "transactions", "trans.", "letters", "magazine",
+        "revue", "revista", "annals", "archives", "bulletin", "preprints", "print"
+    ]
+    conf_acronyms = [
+        "icml", "neurips", "nips", "aaai", "ijcai", "cvpr", "iccv", "eccv",
+        "kdd", "sdm", "aistats", "emnlp", "acl", "naacl", "eacl", "iclr",
+        "icra", "iros", "uai", "ecml", "pkdd"
+    ]
+    conference_certainty = False
+    if any(k in v for k in conf_keywords):
+        conference_certainty = True
+        return("Conference", conference_certainty)
+    if any(a in v for a in conf_acronyms):
+        return("Conference", conference_certainty)
+    if any(k in v for k in journ_keywords):
+        return("Journal", conference_certainty)
+    return("Unknown", conference_certainty)
 
-def match_quality(venue, is_cs_ai=False):
-    if pd.isna(venue) or not isinstance(venue, str) or venue.strip() == "":
-        return None, None, None, 0, "None"
-    
+def match_quality(venue: str, is_cs_ai=False):
+    """
+    For each venue:
+      1) guesser(venue) -> hint + conference_confidence
+      2) Try exact match OR token overlap >= 0.70 in the hinted dataset(s)
+      3) Only if conference_confidence == False: fuzzy fallback (avoid matching false journals)
+    Returns:
+      (match_type, matched_title, rank, match_score, source)
+    """
+    # --- guards ---
+    if pd.isna(venue) or not isinstance(venue, str) or not venue.strip():
+        return ("Error", None, "-", 0.0, "Invalid venue")
+
     venue_norm = normalize_text(venue)
-    if not venue_norm: return "Unranked", None, "-", 0, "Failed"
+    if not venue_norm:
+        return ("Error", None, "-", 0.0, "Normalization failed")
 
-    # exact match
-    if venue_norm in lookup_map:
-        kind, title, rank = lookup_map[venue_norm]
-        return kind, title, rank, 100.0, "Exact Match"
+    venue_tokens = set(venue_norm.split())
+    if not venue_tokens:
+        return ("Error", None, "-", 0.0, "No tokens")
 
-    # acronyms
-    venue_acronym_match = re.search(r'\b([A-Z]{3,})\b', venue)
-    if venue_acronym_match:
-        acronym = venue_acronym_match.group(1).lower()
-        if "acronym" in conferences.columns:
-            match = conferences[conferences["acronym"] == acronym]
-            if not match.empty:
-                row = match.iloc[0]
-                return "Conference", row["Title"], get_rank_from_row(row), 100.0, "Acronym"
-
-    # fuzzy logic
-    hint = guesser(venue)
+    hint, conference_confidence = guesser(venue)  
     
-    def search_table(df, kind_label):
-        matches = df[df["Title_norm"].str.contains(venue_norm, regex=False, na=False)]
-        if not matches.empty:
-            best_row = matches.loc[matches["Title_norm"].str.len().idxmin()]
-            return (kind_label, best_row["Title"], get_rank_from_row(best_row), 95.0, "Substring")
-            
-        match = process.extractOne(venue_norm, df["Title_norm"].tolist(), scorer=fuzz.WRatio, score_cutoff=85)
-        if match:
-            norm_title, score, idx = match
-            row = df.iloc[idx]
-            return (kind_label, row["Title"], get_rank_from_row(row), score, "Fuzzy")
+    def clean_rank(val):
+        if pd.isna(val):
+            return "-"
+        s = str(val).strip()
+        return s if s and s.lower() not in {"nan", "none"} else "-"
+
+    # --- choose search order based on hint + confidence ---
+    if hint == "conference":
+        search_order = [(conferences, "Conference")]
+        # only try journals too if not fully confident it's a conference
+        if not conference_confidence:
+            search_order.append((journals, "Journal"))
+    elif hint == "journal":
+        search_order = [(journals, "Journal"), (conferences, "Conference")]
+    else:
+        search_order = [(conferences, "Conference"), (journals, "Journal")]
+
+    # --- stage 1: exact OR token overlap >= 0.70 ---
+    def exact_or_token_match(df: pd.DataFrame, kind: str):
+        if df is None or df.empty or "Title_norm" not in df.columns:
+            return None
+
+        for _, row in df.iterrows():
+            title_raw = row.get("Title")
+            title_norm = row.get("Title_norm")
+
+            if pd.isna(title_raw) or pd.isna(title_norm):
+                continue
+
+            title_norm = str(title_norm).strip()
+            if not title_norm:
+                continue
+
+            # Exact normalized match
+            if venue_norm == title_norm:
+                return (
+                    kind,
+                    str(title_raw),
+                    clean_rank(row.get("rank")),
+                    100.0,
+                    "DB (Exact)",
+                )
+
+            # Token overlap >= 70%
+            title_tokens = set(title_norm.split())
+            if not title_tokens:
+                continue
+
+            overlap = len(venue_tokens & title_tokens) / max(len(venue_tokens), len(title_tokens))
+            if overlap >= 0.70:
+                return (
+                    kind,
+                    str(title_raw),
+                    clean_rank(row.get("rank")),
+                    round(overlap * 100, 2),
+                    "DB (Token≥70%)",
+                )
+
         return None
 
-    best_match = None
-    if hint == "conference":
-        best_match = search_table(conferences, "Conference")
-    elif hint == "journal":
-        best_match = search_table(journals, "Journal")
-    else:
-        match_c = search_table(conferences, "Conference")
-        match_j = search_table(journals, "Journal")
-        score_c = match_c[3] if match_c else 0
-        score_j = match_j[3] if match_j else 0
-        
-        if score_c == 0 and score_j == 0: best_match = None
-        elif score_c >= score_j: best_match = match_c
-        else: best_match = match_j
+    for df, kind in search_order:
+        res = exact_or_token_match(df, kind)
+        if res:
+            return res
 
-    if best_match: return best_match
-    return "Unranked", None, "-", 0, "Failed"
+    # --- stage 2: fuzzy ONLY if conference_confidence is False ---
+    if conference_confidence is False:
+        def best_fuzzy(df: pd.DataFrame, kind: str):
+            if df is None or df.empty or "Title" not in df.columns:
+                return None
+
+            titles = df["Title"].astype(str).tolist()
+            result = process.extractOne(venue, titles, scorer=fuzz.WRatio)
+            if not result:
+                return None
+
+            match_title, score, _ = result
+            row = df[df["Title"].astype(str) == str(match_title)].iloc[0]
+            return (
+                kind,
+                str(match_title),
+                clean_rank(row.get("rank")),
+                float(score),
+                "DB (Fuzzy)",
+            )
+
+        candidates = []
+        if hint == "conference":
+            c = best_fuzzy(conferences, "Conference")
+            if c: candidates.append(c)
+        elif hint == "journal":
+            j = best_fuzzy(journals, "Journal")
+            if j: candidates.append(j)
+        else:
+            c = best_fuzzy(conferences, "Conference")
+            if c: candidates.append(c)
+            j = best_fuzzy(journals, "Journal")
+            if j: candidates.append(j)
+
+        if candidates:
+            best = max(candidates, key=lambda x: x[3])
+            if best[3] >= 90:  
+                return best
+
+    return (hint, None, "-", 0.0, "No match")
 
 def evaluate_author_data_headless(data, cs_ai):
-    df = pd.DataFrame(data["publications"])
-    
-    df["year"] = pd.to_numeric(df["year"], errors="coerce")
-    df["citations"] = pd.to_numeric(df["citations"], errors="coerce").fillna(0).astype(int)
-    
-    # --- OPTIMIZED Venue Matching ---
-    if "venue_type" not in df.columns: df["venue_type"] = None
-    if "rank" not in df.columns: df["rank"] = None
-    if "matched_title" not in df.columns: df["matched_title"] = None
-    if "match_score" not in df.columns: df["match_score"] = 0.0
-    if "source" not in df.columns: df["source"] = None
-        
-    needs_match_mask = (df["rank"].isna() | (df["rank"] == "-") | (df["venue_type"].isna()))
-    venues_to_match = df.loc[needs_match_mask, "venue"].dropna().unique().tolist()
-    
-    venue_cache = {}
-    
-    for venue in venues_to_match:
-        venue_cache[venue] = match_quality(venue, cs_ai)
-    
-    def merge_match(row):
-        if row["venue"] in venue_cache:
-            return venue_cache[row["venue"]]
-        return (row.get("venue_type"), row.get("matched_title"), row.get("rank"), row.get("match_score"), row.get("source"))
 
-    df[["venue_type", "matched_title", "rank", "match_score", "source"]] = df.apply(
-        lambda r: pd.Series(merge_match(r)), axis=1
+    df = pd.DataFrame(data["publications"])
+
+    # --- 1. Basic Cleaning ---
+    df["year"] = pd.to_numeric(df.get("year"), errors="coerce")
+    df["citations"] = pd.to_numeric(df.get("citations"), errors="coerce").fillna(0).astype(int)
+
+    # --- 2. Venue Matching ---
+    venues = df["venue"].dropna()
+    venue_cache = {v: match_quality(v, cs_ai) for v in venues}
+
+    # Map every row's venue -> (match_type, matched_title, rank, match_score, source)
+    matched = df["venue"].map(venue_cache)
+
+    df[["match_type", "matched_title", "rank", "match_score", "source"]] = matched.apply(
+        lambda x: pd.Series(x if isinstance(x, (tuple, list)) else (None, None, None, 0.0, None))
     )
 
     # --- Calculate Academic Metrics ---

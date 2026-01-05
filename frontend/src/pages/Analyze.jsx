@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { Star, TrendingUp, BarChart3, AlertCircle, ScatterChart as ScatterIcon, Tag } from "lucide-react";
+import { Star, TrendingUp, BarChart3, AlertCircle, ScatterChart as ScatterIcon, Tag, ScrollText } from "lucide-react";
 
 // --- COLORS ---
 const COLOR_A1 = "#2563EB"; // Blue
@@ -115,42 +115,56 @@ export default function AnalyzeCompare() {
         })}
       </div>
 
-      {/* --- VISUALIZATION 1: RANK --- */}
+      {/* --- VISUALIZATION 1: RANK (BARS) --- */}
       {hasBothAuthors && (
         <div style={chartSection}>
             <div style={chartHeader}>
                 <div style={iconBadge}><BarChart3 size={20} color={COLOR_A1} /></div>
                 <div>
-                    <h3 style={chartTitle}>Publication Quality Comparison</h3>
-                    <p style={chartSub}>Comparing where authors publish based on venue rank.</p>
+                    <h3 style={chartTitle}>Publication Quality</h3>
+                    <p style={chartSub}>Comparison by venue ranking (Q1, A*, etc).</p>
                 </div>
             </div>
             <RankChart author1={compare[0]} author2={compare[1]} />
         </div>
       )}
 
-      {/* --- VISUALIZATION 2: BUBBLE SCATTER --- */}
+      {/* --- VISUALIZATION 2: VENUE TYPE (TORNADO) --- */}
+      {hasBothAuthors && (
+         <div style={chartSection}>
+            <div style={chartHeader}>
+                <div style={iconBadge}><ScrollText size={20} color={COLOR_A1} /></div>
+                <div>
+                    <h3 style={chartTitle}>Venue Distribution</h3>
+                    <p style={chartSub}>Ratio of Journals vs Conferences vs Books.</p>
+                </div>
+            </div>
+            <VenueTornadoChart author1={compare[0]} author2={compare[1]} />
+        </div>
+      )}
+
+      {/* --- VISUALIZATION 3: TIMELINE (BUBBLE) --- */}
       {hasBothAuthors && (
          <div style={chartSection}>
             <div style={chartHeader}>
                 <div style={iconBadge}><ScatterIcon size={20} color={COLOR_A1} /></div>
                 <div>
-                    <h3 style={chartTitle}>Timeline & Impact Analysis</h3>
-                    <p style={chartSub}>X: Year | Y: Yearly Paper Output | Bubble Size: Total Citations</p>
+                    <h3 style={chartTitle}>Timeline & Impact</h3>
+                    <p style={chartSub}>X: Year | Y: Output | Size: Citations</p>
                 </div>
             </div>
             <BubbleChart author1={compare[0]} author2={compare[1]} />
         </div>
       )}
 
-      {/* --- VISUALIZATION 3: KEYWORD CLOUD --- */}
+      {/* --- VISUALIZATION 4: KEYWORDS (CLOUD) --- */}
       {hasBothAuthors && (
          <div style={chartSection}>
             <div style={chartHeader}>
                 <div style={iconBadge}><Tag size={20} color={COLOR_A1} /></div>
                 <div>
-                    <h3 style={chartTitle}>Research Focus Cloud</h3>
-                    <p style={chartSub}>Top keywords extracted from publication titles.</p>
+                    <h3 style={chartTitle}>Research Focus</h3>
+                    <p style={chartSub}>Top shared and unique keywords.</p>
                 </div>
             </div>
             <KeywordCloud author1={compare[0]} author2={compare[1]} />
@@ -165,37 +179,115 @@ export default function AnalyzeCompare() {
 // === SUB-COMPONENTS (Charts) ===
 // =========================================
 
+function VenueTornadoChart({ author1, author2 }) {
+    // 1. Process Data
+    const process = (author) => {
+        const counts = { "Journal": 0, "Conference": 0, "Book": 0, "Other": 0 };
+        if (!author?.fullReport?.papers) return counts;
+        
+        author.fullReport.papers.forEach(p => {
+            const t = (p.venue_type || "").toLowerCase();
+            if (t.includes("journal")) counts["Journal"]++;
+            else if (t.includes("conference") || t.includes("proceeding")) counts["Conference"]++;
+            else if (t.includes("book") || t.includes("chapter")) counts["Book"]++;
+            else counts["Other"]++;
+        });
+        return counts;
+    };
+
+    const d1 = process(author1);
+    const d2 = process(author2);
+    const categories = ["Journal", "Conference", "Book", "Other"];
+    
+    // Find absolute max value to normalize bar widths
+    const maxVal = Math.max(
+        ...categories.map(c => Math.max(d1[c], d2[c]))
+    ) || 1;
+
+    // Check if empty
+    const totalPapers = Object.values(d1).reduce((a,b)=>a+b,0) + Object.values(d2).reduce((a,b)=>a+b,0);
+    if(totalPapers === 0) return <div style={noDataState}>No venue data available.</div>;
+
+    return (
+        <div style={chartContainer}>
+             <div style={legendWrap}>
+                <div style={legendItem}><span style={{ ...legendDot, background: COLOR_A1 }}></span> {author1.name}</div>
+                <div style={legendItem}><span style={{ ...legendDot, background: COLOR_A2 }}></span> {author2.name}</div>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginTop: "10px" }}>
+                {categories.map(cat => {
+                    const v1 = d1[cat];
+                    const v2 = d2[cat];
+                    const w1 = (v1 / maxVal) * 100;
+                    const w2 = (v2 / maxVal) * 100;
+
+                    // Only show rows that have at least one paper
+                    if (v1 === 0 && v2 === 0) return null;
+
+                    return (
+                        <div key={cat} style={{ display: "flex", alignItems: "center" }}>
+                            
+                            {/* LEFT SIDE (Author 1) */}
+                            <div style={{ flex: 1, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: "8px" }}>
+                                {v1 > 0 && <span style={{ fontSize: "11px", color: "#64748B", fontWeight: 600 }}>{v1}</span>}
+                                <div style={{ 
+                                    width: `${w1}%`, 
+                                    height: "24px", // <--- FIXED: Explicit height
+                                    backgroundColor: COLOR_A1, 
+                                    borderRadius: "4px 0 0 4px",
+                                    opacity: 0.9,
+                                    transition: "width 0.5s ease"
+                                }}></div>
+                            </div>
+
+                            {/* CENTER AXIS (Label) */}
+                            <div style={{ width: "100px", textAlign: "center", fontSize: "12px", fontWeight: 700, color: "#1E293B", flexShrink: 0 }}>
+                                {cat}
+                            </div>
+
+                            {/* RIGHT SIDE (Author 2) */}
+                            <div style={{ flex: 1, display: "flex", justifyContent: "flex-start", alignItems: "center", gap: "8px" }}>
+                                <div style={{ 
+                                    width: `${w2}%`, 
+                                    height: "24px", // <--- FIXED: Explicit height
+                                    backgroundColor: COLOR_A2, 
+                                    borderRadius: "0 4px 4px 0",
+                                    opacity: 0.9,
+                                    transition: "width 0.5s ease"
+                                }}></div>
+                                {v2 > 0 && <span style={{ fontSize: "11px", color: "#64748B", fontWeight: 600 }}>{v2}</span>}
+                            </div>
+                        </div>
+                    )
+                })}
+            </div>
+            
+            {/* X-AXIS LABEL */}
+            <div style={{ textAlign: "center", fontSize: "11px", fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", marginTop: "20px" }}>
+                Number of Publications
+            </div>
+        </div>
+    );
+}
+
 function KeywordCloud({ author1, author2 }) {
     const k1 = author1?.fullReport?.metrics?.keywords || [];
     const k2 = author2?.fullReport?.metrics?.keywords || [];
-
-    // Helper to normalize strings for comparison
     const norm = (str) => str.toLowerCase().trim();
 
-    // 1. Process Data
     const allKeywords = {};
-
-    // Add Author 1 keywords (Top 6)
     k1.slice(0, 8).forEach((k, idx) => {
-        const text = k.text; 
-        const key = norm(text);
+        const text = k.text; const key = norm(text);
         allKeywords[key] = { text: text, a1: true, a2: false, score: (8 - idx) }; 
     });
-
-    // Add Author 2 keywords (Top 6)
     k2.slice(0, 8).forEach((k, idx) => {
-        const text = k.text;
-        const key = norm(text);
-        if (allKeywords[key]) {
-            allKeywords[key].a2 = true;
-            allKeywords[key].score += (8 - idx); // Boost score if shared
-        } else {
-            allKeywords[key] = { text: text, a1: false, a2: true, score: (8 - idx) };
-        }
+        const text = k.text; const key = norm(text);
+        if (allKeywords[key]) { allKeywords[key].a2 = true; allKeywords[key].score += (8 - idx); } 
+        else { allKeywords[key] = { text: text, a1: false, a2: true, score: (8 - idx) }; }
     });
 
     const cloudData = Object.values(allKeywords).sort((a,b) => b.score - a.score);
-
     if (cloudData.length === 0) return <div style={noDataState}>No keyword data available.</div>;
 
     return (
@@ -205,37 +297,16 @@ function KeywordCloud({ author1, author2 }) {
                 <div style={legendItem}><span style={{ ...legendDot, background: COLOR_A2 }}></span> {author2.name} Only</div>
                 <div style={legendItem}><span style={{ ...legendDot, background: COLOR_SHARED }}></span> Shared Interest</div>
             </div>
-
             <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", justifyContent: "center", padding: "20px 0" }}>
                 {cloudData.map((k, i) => {
-                    let bg = "#F1F5F9";
-                    let color = "#64748B";
-                    let border = "transparent";
+                    let bg = "#F1F5F9"; let color = "#64748B"; let border = "transparent";
+                    if (k.a1 && k.a2) { bg = COLOR_SHARED_BG; color = COLOR_SHARED; border = COLOR_SHARED; } 
+                    else if (k.a1) { bg = COLOR_A1_BG; color = COLOR_A1; border = COLOR_A1; } 
+                    else if (k.a2) { bg = COLOR_A2_BG; color = COLOR_A2; border = COLOR_A2; }
 
-                    if (k.a1 && k.a2) {
-                        bg = COLOR_SHARED_BG; color = COLOR_SHARED; border = COLOR_SHARED;
-                    } else if (k.a1) {
-                        bg = COLOR_A1_BG; color = COLOR_A1; border = COLOR_A1;
-                    } else if (k.a2) {
-                        bg = COLOR_A2_BG; color = COLOR_A2; border = COLOR_A2;
-                    }
-
-                    // Dynamic font size based on score
                     const fontSize = 13 + Math.min(k.score, 10); 
-                    
                     return (
-                        <span key={i} style={{ 
-                            fontSize: `${fontSize}px`, 
-                            backgroundColor: bg, 
-                            color: color, 
-                            border: `1px solid ${border}`,
-                            padding: "6px 16px", 
-                            borderRadius: "99px", 
-                            fontWeight: k.a1 && k.a2 ? 800 : 600,
-                            textTransform: "capitalize",
-                            opacity: 0,
-                            animation: `fadeIn 0.5s ease forwards ${i * 0.05}s`
-                        }}>
+                        <span key={i} style={{ fontSize: `${fontSize}px`, backgroundColor: bg, color: color, border: `1px solid ${border}`, padding: "6px 16px", borderRadius: "99px", fontWeight: k.a1 && k.a2 ? 800 : 600, textTransform: "capitalize", animation: `fadeIn 0.5s ease forwards ${i * 0.05}s` }}>
                             {k.text}
                         </span>
                     )
@@ -246,9 +317,7 @@ function KeywordCloud({ author1, author2 }) {
     );
 }
 
-
 function BubbleChart({ author1, author2 }) {
-    // 1. Data Processing Helper
     const aggregateData = (author) => {
         if (!author?.fullReport?.papers) return [];
         const yearMap = {};
@@ -257,8 +326,7 @@ function BubbleChart({ author1, author2 }) {
             const cits = parseInt(p.citations) || 0;
             if (!year || isNaN(year) || year > new Date().getFullYear() + 2) return;
             if (!yearMap[year]) { yearMap[year] = { year, count: 0, citations: 0 }; }
-            yearMap[year].count += 1;
-            yearMap[year].citations += cits;
+            yearMap[year].count += 1; yearMap[year].citations += cits;
         });
         return Object.values(yearMap).sort((a,b) => a.year - b.year);
     };
@@ -266,14 +334,11 @@ function BubbleChart({ author1, author2 }) {
     const d1 = aggregateData(author1).map(d => ({ ...d, authorIdx: 0 }));
     const d2 = aggregateData(author2).map(d => ({ ...d, authorIdx: 1 }));
     const combinedData = [...d1, ...d2];
-
     if (combinedData.length === 0) return <div style={noDataState}>No timeline data available.</div>;
 
     const years = combinedData.map(d => d.year);
-    const minYear = Math.min(...years);
-    const maxYear = Math.max(...years);
+    const minYear = Math.min(...years); const maxYear = Math.max(...years);
     const yearSpan = maxYear - minYear || 1; 
-
     const maxPapers = Math.max(...combinedData.map(d => d.count)) || 1;
     const maxCits = Math.max(...combinedData.map(d => d.citations)) || 1;
 
@@ -281,20 +346,14 @@ function BubbleChart({ author1, author2 }) {
     const padding = { top: 20, right: 30, bottom: 40, left: 50 };
     const chartW = width - padding.left - padding.right;
     const chartH = height - padding.top - padding.bottom;
-    
     const minBub = 4; const maxBub = 35;
     const getX = (year) => ((year - minYear) / yearSpan) * chartW;
     const getY = (count) => chartH - ((count / maxPapers) * chartH);
     const getR = (cits) => minBub + (cits / maxCits) * (maxBub - minBub);
-
-    const xLabels = [];
-    const step = yearSpan > 15 ? 5 : Math.ceil(yearSpan / 5); 
+    const xLabels = []; const step = yearSpan > 15 ? 5 : Math.ceil(yearSpan / 5); 
     for(let y = minYear; y <= maxYear; y+=step) { xLabels.push(y); }
-
-    const yLabels = [];
-    const yStep = Math.ceil(maxPapers / 4);
+    const yLabels = []; const yStep = Math.ceil(maxPapers / 4);
     for(let i = 0; i <= maxPapers; i+=yStep) { if(yLabels.length < 5) yLabels.push(i); }
-
 
     return (
         <div style={chartContainer}>
@@ -302,39 +361,21 @@ function BubbleChart({ author1, author2 }) {
                 <div style={legendItem}><span style={{ ...legendDot, background: COLOR_A1 }}></span> {author1.name}</div>
                 <div style={legendItem}><span style={{ ...legendDot, background: COLOR_A2 }}></span> {author2.name}</div>
             </div>
-
             <div style={{ position: 'relative', width: '100%', paddingBottom: '50%' }}>
             <svg viewBox={`0 0 ${width} ${height}`} style={{ position:'absolute', top:0, left:0, width:'100%', height:'100%', overflow: 'visible' }}>
                 <g transform={`translate(${padding.left}, ${padding.top})`}>
                     {yLabels.map(labelVal => {
                         const yPos = getY(labelVal);
-                        return (
-                            <g key={'grid'+labelVal}>
-                                <line x1={0} y1={yPos} x2={chartW} y2={yPos} stroke="#E2E8F0" strokeWidth={1} strokeDasharray="4 4" />
-                                <text x={-10} y={yPos + 4} textAnchor="end" fontSize={11} fill="#94A3B8">{labelVal}</text>
-                            </g>
-                        )
+                        return ( <g key={'grid'+labelVal}> <line x1={0} y1={yPos} x2={chartW} y2={yPos} stroke="#E2E8F0" strokeWidth={1} strokeDasharray="4 4" /> <text x={-10} y={yPos + 4} textAnchor="end" fontSize={11} fill="#94A3B8">{labelVal}</text> </g> )
                     })}
-                    {xLabels.map(year => {
-                         const xPos = getX(year);
-                         return <text key={'txt'+year} x={xPos} y={chartH + 20} textAnchor="middle" fontSize={11} fill="#94A3B8">{year}</text>
-                    })}
+                    {xLabels.map(year => { const xPos = getX(year); return <text key={'txt'+year} x={xPos} y={chartH + 20} textAnchor="middle" fontSize={11} fill="#94A3B8">{year}</text> })}
                     <line x1={0} y1={chartH} x2={chartW} y2={chartH} stroke="#CBD5E1" strokeWidth={2} />
                     <line x1={0} y1={0} x2={0} y2={chartH} stroke="#CBD5E1" strokeWidth={2} />
-                   
                     {combinedData.sort((a,b) => b.citations - a.citations).map((d, i) => {
-                        const cx = getX(d.year);
-                        const cy = getY(d.count);
-                        const r = getR(d.citations);
-                        const color = d.authorIdx === 0 ? COLOR_A1 : COLOR_A2;
-                        const bgColor = d.authorIdx === 0 ? COLOR_A1_BG : COLOR_A2_BG;
+                        const cx = getX(d.year); const cy = getY(d.count); const r = getR(d.citations);
+                        const color = d.authorIdx === 0 ? COLOR_A1 : COLOR_A2; const bgColor = d.authorIdx === 0 ? COLOR_A1_BG : COLOR_A2_BG;
                         const offset = (d.authorIdx === 1 && d1.some(dp1 => dp1.year === d.year && dp1.count === d.count)) ? 4 : 0;
-
-                        return (
-                            <circle key={i} cx={cx + offset} cy={cy} r={r} fill={bgColor} stroke={color} strokeWidth={2} style={{ transition: 'all 0.3s ease', cursor: 'crosshair' }}>
-                                <title>{`${d.authorIdx === 0 ? author1.name : author2.name} (${d.year})\nOutput: ${d.count} papers\nImpact: ${d.citations} citations`}</title>
-                            </circle>
-                        )
+                        return ( <circle key={i} cx={cx + offset} cy={cy} r={r} fill={bgColor} stroke={color} strokeWidth={2} style={{ transition: 'all 0.3s ease', cursor: 'crosshair' }}><title>{`${d.authorIdx === 0 ? author1.name : author2.name} (${d.year})\nOutput: ${d.count} papers\nImpact: ${d.citations} citations`}</title></circle> )
                     })}
                 </g>
             </svg>
@@ -350,33 +391,20 @@ function RankChart({ author1, author2 }) {
         const counts = {};
         author.fullReport.papers.forEach(p => {
             let r = p.rank || "Unranked";
-            if (r.includes("Q1")) r = "Q1";
-            else if (r.includes("Q2")) r = "Q2";
-            else if (r.includes("Q3")) r = "Q3";
-            else if (r.includes("Q4")) r = "Q4";
-            else if (r.includes("A*")) r = "A*";
-            else if (r === "A") r = "A";
-            else if (r === "B") r = "B";
-            else if (r === "C") r = "C";
-            else if (r.includes("National") || r.includes("USA")) { r = "Unranked"; }
+            if (r.includes("Q1")) r = "Q1"; else if (r.includes("Q2")) r = "Q2"; else if (r.includes("Q3")) r = "Q3"; else if (r.includes("Q4")) r = "Q4"; else if (r.includes("A*")) r = "A*"; else if (r === "A") r = "A"; else if (r === "B") r = "B"; else if (r === "C") r = "C"; else if (r.includes("National") || r.includes("USA")) { r = "Unranked"; }
             counts[r] = (counts[r] || 0) + 1;
         });
         return counts;
     };
-
-    const d1 = processData(author1);
-    const d2 = processData(author2);
+    const d1 = processData(author1); const d2 = processData(author2);
     const PRIORITY_RANKS = ["A*", "A", "Q1", "Q2", "Q3", "B", "C", "Unranked"];
     const allKeys = new Set([...Object.keys(d1), ...Object.keys(d2)]);
     const labels = Array.from(allKeys).sort((a, b) => {
-        const idxA = PRIORITY_RANKS.indexOf(a);
-        const idxB = PRIORITY_RANKS.indexOf(b);
+        const idxA = PRIORITY_RANKS.indexOf(a); const idxB = PRIORITY_RANKS.indexOf(b);
         if (idxA !== -1 && idxB !== -1) return idxA - idxB;
-        if (idxA !== -1) return -1;
-        if (idxB !== -1) return 1;
+        if (idxA !== -1) return -1; if (idxB !== -1) return 1;
         return a.localeCompare(b);
     });
-
     const maxVal = Math.max( ...labels.map(l => Math.max(d1[l] || 0, d2[l] || 0)) ) || 1;
     if (labels.length === 0) return <div style={noDataState}>No ranked paper data available for comparison.</div>;
 
@@ -390,10 +418,8 @@ function RankChart({ author1, author2 }) {
                 <div style={{ writingMode: "vertical-rl", transform: "rotate(180deg)", fontSize: 11, color: "#94A3B8", fontWeight: 700, textTransform: "uppercase", height: "100%", textAlign: "center" }}>Total Papers</div>
                 <div style={{ flex: 1, display: "flex", height: "100%", alignItems: "flex-end", gap: "4%" }}>
                     {labels.map((label) => {
-                        const v1 = d1[label] || 0;
-                        const v2 = d2[label] || 0;
-                        const h1 = (v1 / maxVal) * 100;
-                        const h2 = (v2 / maxVal) * 100;
+                        const v1 = d1[label] || 0; const v2 = d2[label] || 0;
+                        const h1 = (v1 / maxVal) * 100; const h2 = (v2 / maxVal) * 100;
                         return (
                             <div key={label} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 8, height: "100%", justifyContent: "flex-end" }}>
                                 <div style={{ width: "100%", display: "flex", alignItems: "flex-end", justifyContent: "center", gap: 4, height: "100%" }}>
@@ -420,7 +446,6 @@ function Metric({ label, value }) {
 }
 
 /* --- STYLES --- */
-
 const page = { maxWidth: 1000, margin: "0 auto", padding: "40px 20px 120px", fontFamily: "Inter, sans-serif" };
 const title = { fontSize: 32, fontWeight: 900, color: "#0F172A", marginBottom: 12 };
 const selectors = { display: "flex", gap: 24, marginBottom: 40 };
@@ -446,6 +471,4 @@ const noDataState = { padding: 40, textAlign: "center", color: "#94A3B8", fontSt
 const legendWrap = { display: "flex", justifyContent: "flex-end", gap: 16, marginBottom: 20, fontSize: 13, fontWeight: 600 };
 const legendItem = { display: "flex", alignItems: "center", gap: 6 };
 const legendDot = { width: 10, height: 10, borderRadius: 2 };
-
-// Rank Chart Specific
 const barValue = { position: "absolute", top: -20, left: "50%", transform: "translateX(-50%)", fontSize: 10, fontWeight: 700, color: "#64748B" };

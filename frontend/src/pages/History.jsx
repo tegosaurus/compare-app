@@ -18,6 +18,7 @@ import {
   Pencil,
   Filter,
   Brain,
+  TrendingUp
 } from "lucide-react";
 
 const BRAND_BLUE_1 = "#2563EB";
@@ -234,6 +235,7 @@ export default function History() {
             onShortlist={() => toggleShortlist(item.id)}
             onEdit={() => openEdit(item)}
             onDelete={() => setDeleteTarget(item)}
+            onAnalyze={() => navigate('/analyze', { state: { preSelectId: item.id } })}
           />
         ))}
       </div>
@@ -323,7 +325,7 @@ function BrandWordmark() {
   );
 }
 
-function HistoryCard({ item, onShortlist, onEdit, onDelete }) {
+function HistoryCard({ item, onShortlist, onEdit, onDelete, onAnalyze }) {
   const savedDate = item.date ? new Date(item.date).toLocaleDateString() : "-";
   const rating = item.userRating || 0;
 
@@ -370,6 +372,9 @@ function HistoryCard({ item, onShortlist, onEdit, onDelete }) {
 
       {/* Actions */}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <IconBtn onClick={onAnalyze} title="Deep Analyze" active={false}>
+          <TrendingUp size={16} color={BRAND_BLUE_1} />
+        </IconBtn>
         <IconBtn
           onClick={onShortlist}
           active={item.shortlisted}

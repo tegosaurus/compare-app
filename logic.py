@@ -291,7 +291,7 @@ def evaluate_author_data_headless(data, cs_ai):
     # Map every row's venue -> (match_type, matched_title, rank, match_score, source)
     matched = df["venue"].map(venue_cache)
 
-    df[["match_type", "matched_title", "rank", "match_score", "source"]] = matched.apply(
+    df[["venue_type", "matched_title", "rank", "match_score", "source"]] = matched.apply(
         lambda x: pd.Series(x if isinstance(x, (tuple, list)) else (None, None, None, 0.0, None))
     )
 

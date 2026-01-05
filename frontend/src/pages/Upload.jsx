@@ -1,9 +1,15 @@
 import React, { useEffect, useRef, useState } from "react";
 
-const ADMIN_PASSWORD = "MDS10"; //password for now
-
 /* ---------------- Password Modal ---------------- */
-function PasswordModal({ open, title, subtitle, error, onConfirm, onCancel }) {
+function PasswordModal({
+  open,
+  title,
+  subtitle,
+  error,
+  loading,
+  onConfirm,
+  onCancel,
+}) {
   const [password, setPassword] = useState("");
 
   useEffect(() => {
@@ -33,6 +39,7 @@ function PasswordModal({ open, title, subtitle, error, onConfirm, onCancel }) {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Enter admin password"
+              disabled={loading}
             />
           </label>
 
@@ -43,11 +50,16 @@ function PasswordModal({ open, title, subtitle, error, onConfirm, onCancel }) {
               type="button"
               className="modalBtn modalBtnGhost"
               onClick={onCancel}
+              disabled={loading}
             >
               Cancel
             </button>
-            <button type="submit" className="modalBtn modalBtnPrimary">
-              Confirm
+            <button
+              type="submit"
+              className="modalBtn modalBtnPrimary"
+              disabled={loading}
+            >
+              {loading ? "Checking..." : "Confirm"}
             </button>
           </div>
         </form>
@@ -100,9 +112,13 @@ export default function UploadPage() {
   const [uploadedFile, setUploadedFile] = useState(null); // { file, type }
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [passwordError, setPasswordError] = useState("");
+  const [passwordLoading, setPasswordLoading] = useState(false);
 
   const [listTypeOpen, setListTypeOpen] = useState(false);
   const [selectedListType, setSelectedListType] = useState("");
+
+  // ✅ Change this if your FastAPI runs elsewhere (deployed URL)
+  const API_BASE_URL = "http://127.0.0.1:8000";
 
   function clearFileInput() {
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -120,24 +136,50 @@ export default function UploadPage() {
     resetFlow();
   }
 
-    // (replace with Supabase Edge Function verification once figured out)
-  function handlePasswordConfirm(password) {
+  // password via FastAPI 
+  async function handlePasswordConfirm(password) {
     if (!password) {
       setPasswordError("Password required.");
       return;
     }
 
-    if (password !== ADMIN_PASSWORD) {
-      setPasswordError("Incorrect password.");
-      return;
-    }
-
+    setPasswordLoading(true);
     setPasswordError("");
-    setPasswordOpen(false);
-    setListTypeOpen(true);
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/verify-admin-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+
+      // Server responded but with an error code
+      if (!res.ok) {
+        setPasswordError("Could not verify password. (Server error)");
+        return;
+      }
+
+      // Response in JSON
+      const data = await res.json();
+
+      if (!data?.ok) {
+        setPasswordError("Incorrect password.");
+        return;
+      }
+
+      // correct password
+      setPasswordOpen(false);
+      setListTypeOpen(true);
+    } catch (e) {
+      // Network error / backend down / CORS blocked
+      setPasswordError("Could not verify password. Is the backend running?");
+    } finally {
+      setPasswordLoading(false);
+    }
   }
 
   function handlePasswordCancel() {
+    if (passwordLoading) return; // prevent cancel while checking
     setPasswordOpen(false);
     setPasswordError("");
     resetFlow();
@@ -211,6 +253,7 @@ export default function UploadPage() {
           title="Admin Password Required"
           subtitle="Enter the admin password to continue."
           error={passwordError}
+          loading={passwordLoading}
           onConfirm={handlePasswordConfirm}
           onCancel={handlePasswordCancel}
         />

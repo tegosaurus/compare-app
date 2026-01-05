@@ -1,10 +1,8 @@
-# Updated
 import os
 from sqlalchemy import create_engine, Table, Column, Integer, Float, String, Text, ForeignKey, MetaData, DateTime
 from sqlalchemy.dialects.postgresql import JSONB, insert
 from dotenv import load_dotenv
 from datetime import datetime, timezone
-import pandas as pd
 
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -152,10 +150,6 @@ def update_publication_venues(author_id: str, df):
     with engine.begin() as conn:
         for _, row in df.iterrows():
 
-            val_type = row.get("match_type")
-            if pd.isna(val_type):
-                val_type = row.get("venue_type")
-
             conn.execute(
                 publications.update()
                 .where(
@@ -163,7 +157,7 @@ def update_publication_venues(author_id: str, df):
                     (publications.c.title == row["title"])
                 )
                 .values(
-                    venue_type=val_type,
+                    venue_type=row.get("venue_type"),
                     rank=row.get("rank"),
                     match_score=row.get("match_score"),
                     source=row.get("source")

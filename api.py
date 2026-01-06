@@ -1,9 +1,11 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, File, UploadFile, Form # <--- UPDATED IMPORTS
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
 import pandas as pd
 import math
+import shutil
+import os
 
 from logic import extract_author_id, load_or_fetch_author, evaluate_author_data_headless
 from database import update_publication_venues, init_db
@@ -13,7 +15,7 @@ async def lifespan(app: FastAPI):
     print("Checking database tables...")
     init_db()
     print("Database ready.")
-    
+
     yield  # app runs here
     
     print("Shutting down...")
@@ -57,7 +59,7 @@ async def analyze_researcher(request: AnalyzeRequest, background_tasks: Backgrou
     aid = extract_author_id(request.url)
     if not aid:
         raise HTTPException(status_code=400, detail="Invalid Google Scholar URL")
-
+    
     # fetch data
     try:
         data = load_or_fetch_author(aid, force_refresh=request.forceRefresh)
@@ -97,6 +99,44 @@ async def analyze_researcher(request: AnalyzeRequest, background_tasks: Backgrou
     }
 
     return clean_nans(raw_response)
+
+# --- NEW UPLOAD ENDPOINT ---
+@app.post("/upload-quality-list")
+async def upload_quality_list(
+    file: UploadFile = File(...),
+    list_type: str = Form(...),
+    mode: str = Form("replace")
+):
+    """
+    Receives a CSV file and processes it to update the quality journal/conference lists.
+    """
+    try:
+        # Save file temporarily
+        temp_filename = f"temp_{file.filename}"
+        with open(temp_filename, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        # Process CSV 
+        df = pd.read_csv(temp_filename)
+        
+        # --- UPDATED: Call the actual DB function ---
+        from database import update_quality_list_in_db  # Import inside function to avoid circular imports
+        
+        rows_written = update_quality_list_in_db(df, list_type, mode)
+        
+        # Cleanup
+        os.remove(temp_filename)
+        
+        return {
+            "ok": True,
+            "table": list_type,
+            "rows_written": rows_written,
+        }
+
+    except Exception as e:
+        if os.path.exists(f"temp_{file.filename}"):
+            os.remove(f"temp_{file.filename}")
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 @app.get("/")
 def home():

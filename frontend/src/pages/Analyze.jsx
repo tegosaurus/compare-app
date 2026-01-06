@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react"; 
 import { useLocation } from "react-router-dom";
 import { Star, TrendingUp, BarChart3, AlertCircle, ScatterChart as ScatterIcon, Tag, ScrollText, Table } from "lucide-react";
 
@@ -399,6 +399,9 @@ function VenueTornadoChart({ author1, author2 }) {
 }
 
 function BubbleChart({ author1, author2 }) {
+    const containerRef = useRef(null);
+    const [tooltip, setTooltip] = useState(null);
+
     const aggregateData = (author) => {
         if (!author?.fullReport?.papers) return [];
         const yearMap = {};
@@ -411,59 +414,152 @@ function BubbleChart({ author1, author2 }) {
         });
         return Object.values(yearMap).sort((a,b) => a.year - b.year);
     };
+
     const d1 = aggregateData(author1).map(d => ({ ...d, authorIdx: 0 }));
     const d2 = aggregateData(author2).map(d => ({ ...d, authorIdx: 1 }));
     const combinedData = [...d1, ...d2];
     if (combinedData.length === 0) return <div style={noDataState}>No timeline data available.</div>;
 
+    // --- SCALES ---
     const years = combinedData.map(d => d.year);
     const minYear = Math.min(...years); const maxYear = Math.max(...years);
     const yearSpan = maxYear - minYear || 1; 
     const maxPapers = Math.max(...combinedData.map(d => d.count)) || 1;
+    const maxCits = Math.max(...combinedData.map(d => d.citations)) || 1;
+
+    // SVG Internal Dimensions
     const height = 300; const width = 600; 
     const padding = { top: 20, right: 30, bottom: 40, left: 50 };
     const chartW = width - padding.left - padding.right;
     const chartH = height - padding.top - padding.bottom;
-    const minBub = 4; const maxBub = 35;
-    const maxCits = Math.max(...combinedData.map(d => d.citations)) || 1;
+    const minBub = 6; const maxBub = 40; // Slightly larger bubbles for easier hovering
+    
     const getX = (year) => ((year - minYear) / yearSpan) * chartW;
     const getY = (count) => chartH - ((count / maxPapers) * chartH);
     const getR = (cits) => minBub + (cits / maxCits) * (maxBub - minBub);
+
     const xLabels = []; const step = yearSpan > 15 ? 5 : Math.ceil(yearSpan / 5); 
     for(let y = minYear; y <= maxYear; y+=step) { xLabels.push(y); }
     const yLabels = []; const yStep = Math.ceil(maxPapers / 4);
     for(let i = 0; i <= maxPapers; i+=yStep) { if(yLabels.length < 5) yLabels.push(i); }
 
+    // --- MOUSE HANDLERS ---
+    const handleMouseEnter = (e, data) => {
+        if(!containerRef.current) return;
+        // Calculate position relative to container
+        const rect = e.target.getBoundingClientRect();
+        const containerRect = containerRef.current.getBoundingClientRect();
+        const x = rect.left - containerRect.left + rect.width / 2; // Center of bubble
+        const y = rect.top - containerRect.top; // Top of bubble
+        
+        setTooltip({
+            x, y,
+            data,
+            name: data.authorIdx === 0 ? author1.name : author2.name,
+            color: data.authorIdx === 0 ? COLOR_A1 : COLOR_A2
+        });
+    };
+
     return (
-        <div style={chartContainer}>
+        <div style={chartContainer} ref={containerRef}>
             <div style={legendWrap}>
                 <div style={legendItem}><span style={{ ...legendDot, background: COLOR_A1 }}></span> {author1.name}</div>
                 <div style={legendItem}><span style={{ ...legendDot, background: COLOR_A2 }}></span> {author2.name}</div>
             </div>
+
+            {/* CHART SVG */}
             <div style={{ position: 'relative', width: '100%', paddingBottom: '50%' }}>
-            <svg viewBox={`0 0 ${width} ${height}`} style={{ position:'absolute', top:0, left:0, width:'100%', height:'100%', overflow: 'visible' }}>
-                <g transform={`translate(${padding.left}, ${padding.top})`}>
-                    {yLabels.map(labelVal => {
-                        const yPos = getY(labelVal);
-                        return ( <g key={'grid'+labelVal}> <line x1={0} y1={yPos} x2={chartW} y2={yPos} stroke="#E2E8F0" strokeWidth={1} strokeDasharray="4 4" /> <text x={-10} y={yPos + 4} textAnchor="end" fontSize={11} fill="#94A3B8">{labelVal}</text> </g> )
-                    })}
-                    {xLabels.map(year => { const xPos = getX(year); return <text key={'txt'+year} x={xPos} y={chartH + 20} textAnchor="middle" fontSize={11} fill="#94A3B8">{year}</text> })}
-                    <line x1={0} y1={chartH} x2={chartW} y2={chartH} stroke="#CBD5E1" strokeWidth={2} />
-                    <line x1={0} y1={0} x2={0} y2={chartH} stroke="#CBD5E1" strokeWidth={2} />
-                    {combinedData.sort((a,b) => b.citations - a.citations).map((d, i) => {
-                        const cx = getX(d.year); const cy = getY(d.count); const r = getR(d.citations);
-                        const color = d.authorIdx === 0 ? COLOR_A1 : COLOR_A2; const bgColor = d.authorIdx === 0 ? COLOR_A1_BG : COLOR_A2_BG;
-                        const offset = (d.authorIdx === 1 && d1.some(dp1 => dp1.year === d.year && dp1.count === d.count)) ? 4 : 0;
-                        return ( <circle key={i} cx={cx + offset} cy={cy} r={r} fill={bgColor} stroke={color} strokeWidth={2} style={{ transition: 'all 0.3s ease', cursor: 'crosshair' }}><title>{`${d.authorIdx === 0 ? author1.name : author2.name} (${d.year})\nOutput: ${d.count} papers\nImpact: ${d.citations} citations`}</title></circle> )
-                    })}
-                </g>
-            </svg>
+                <svg viewBox={`0 0 ${width} ${height}`} style={{ position:'absolute', top:0, left:0, width:'100%', height:'100%', overflow: 'visible' }}>
+                    <g transform={`translate(${padding.left}, ${padding.top})`}>
+                        {yLabels.map(labelVal => {
+                            const yPos = getY(labelVal);
+                            return ( <g key={'grid'+labelVal}> <line x1={0} y1={yPos} x2={chartW} y2={yPos} stroke="#E2E8F0" strokeWidth={1} strokeDasharray="4 4" /> <text x={-10} y={yPos + 4} textAnchor="end" fontSize={11} fill="#94A3B8">{labelVal}</text> </g> )
+                        })}
+                        {xLabels.map(year => { const xPos = getX(year); return <text key={'txt'+year} x={xPos} y={chartH + 20} textAnchor="middle" fontSize={11} fill="#94A3B8">{year}</text> })}
+                        
+                        <line x1={0} y1={chartH} x2={chartW} y2={chartH} stroke="#CBD5E1" strokeWidth={2} />
+                        <line x1={0} y1={0} x2={0} y2={chartH} stroke="#CBD5E1" strokeWidth={2} />
+                        
+                        {combinedData.sort((a,b) => b.citations - a.citations).map((d, i) => {
+                            const cx = getX(d.year); const cy = getY(d.count); const r = getR(d.citations);
+                            const color = d.authorIdx === 0 ? COLOR_A1 : COLOR_A2; 
+                            const bgColor = d.authorIdx === 0 ? COLOR_A1_BG : COLOR_A2_BG;
+                            const offset = (d.authorIdx === 1 && d1.some(dp1 => dp1.year === d.year && dp1.count === d.count)) ? 4 : 0;
+                            
+                            // Check if this specific bubble is being hovered
+                            const isHovered = tooltip && tooltip.data === d;
+
+                            return ( 
+                                <circle 
+                                    key={i} 
+                                    cx={cx + offset} cy={cy} r={isHovered ? r + 3 : r} 
+                                    fill={isHovered ? color : bgColor} // Solid color on hover
+                                    fillOpacity={isHovered ? 1 : 0.6}
+                                    stroke={color} strokeWidth={isHovered ? 3 : 2} 
+                                    onMouseEnter={(e) => handleMouseEnter(e, d)}
+                                    onMouseLeave={() => setTooltip(null)}
+                                    style={{ transition: 'all 0.2s ease', cursor: 'pointer' }}
+                                /> 
+                            )
+                        })}
+                    </g>
+                </svg>
             </div>
-             <div style={{ textAlign: 'center', fontSize: 11, fontWeight: 700, color: '#94A3B8', marginTop: 0, textTransform: 'uppercase' }}>Year Published</div>
+            
+            {/* AXIS LABELS */}
+            <div style={{ textAlign: 'center', fontSize: 11, fontWeight: 700, color: '#94A3B8', marginTop: 0, textTransform: 'uppercase' }}>Year Published</div>
+            
+            {/* CUSTOM TOOLTIP */}
+            {tooltip && (
+                <div style={{
+                    position: 'absolute',
+                    left: tooltip.x,
+                    top: tooltip.y,
+                    transform: 'translate(-50%, -115%)', // Shift up so arrow points to bubble
+                    backgroundColor: 'white',
+                    borderRadius: '12px',
+                    padding: '12px 16px',
+                    boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0,0,0,0.05)',
+                    pointerEvents: 'none', // Prevents mouse from getting stuck on tooltip
+                    zIndex: 50,
+                    minWidth: '160px',
+                    borderLeft: `4px solid ${tooltip.color}`
+                }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                        <span style={{ fontSize: '14px', fontWeight: 800, color: '#1E293B' }}>{tooltip.data.year}</span>
+                        <span style={{ fontSize: '10px', fontWeight: 700, backgroundColor: '#F1F5F9', padding: '2px 6px', borderRadius: '4px', color: '#64748B' }}>
+                            {tooltip.name.split(' ')[0]}
+                        </span>
+                    </div>
+                    
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                        <div>
+                            <div style={{ fontSize: '10px', color: '#94A3B8', fontWeight: 600, textTransform: 'uppercase' }}>Papers</div>
+                            <div style={{ fontSize: '15px', fontWeight: 700, color: '#0F172A' }}>{tooltip.data.count}</div>
+                        </div>
+                        <div>
+                            <div style={{ fontSize: '10px', color: '#94A3B8', fontWeight: 600, textTransform: 'uppercase' }}>Citations</div>
+                            <div style={{ fontSize: '15px', fontWeight: 700, color: '#0F172A' }}>{tooltip.data.citations}</div>
+                        </div>
+                    </div>
+                    
+                    {/* Little arrow at bottom */}
+                    <div style={{
+                        position: 'absolute',
+                        bottom: '-6px',
+                        left: '50%',
+                        transform: 'translateX(-50%) rotate(45deg)',
+                        width: '12px',
+                        height: '12px',
+                        backgroundColor: 'white',
+                        borderBottom: '1px solid rgba(0,0,0,0.05)',
+                        borderRight: '1px solid rgba(0,0,0,0.05)',
+                    }}></div>
+                </div>
+            )}
         </div>
     )
 }
-
 function RankChart({ author1, author2 }) {
     const processData = (author) => {
         if (!author?.fullReport?.papers) return {};

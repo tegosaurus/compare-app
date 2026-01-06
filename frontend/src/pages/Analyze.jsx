@@ -171,14 +171,14 @@ export default function AnalyzeCompare() {
         </div>
       )}
 
-      {/* --- VISUALIZATION 5: KEYWORDS (CLOUD) --- */}
+      {/* --- VISUALIZATION 5: KEYWORDS (SMART CLOUD) --- */}
       {hasBothAuthors && (
          <div style={chartSection}>
             <div style={chartHeader}>
                 <div style={iconBadge}><Tag size={20} color={COLOR_A1} /></div>
                 <div>
-                    <h3 style={chartTitle}>Research Focus</h3>
-                    <p style={chartSub}>Top shared and unique keywords.</p>
+                    <h3 style={chartTitle}>Research Focus Cloud</h3>
+                    <p style={chartSub}>Scaled by actual frequency in publications.</p>
                 </div>
             </div>
             <KeywordCloud author1={compare[0]} author2={compare[1]} />
@@ -193,31 +193,122 @@ export default function AnalyzeCompare() {
 // === SUB-COMPONENTS (Charts) ===
 // =========================================
 
+function KeywordCloud({ author1, author2 }) {
+    const k1 = author1?.fullReport?.metrics?.keywords || [];
+    const k2 = author2?.fullReport?.metrics?.keywords || [];
+    const norm = (str) => str.toLowerCase().trim();
+
+    const allKeywords = {};
+
+    // Helper to process list
+    // We use the 'count' property from the report data now
+    const processList = (list, isA1) => {
+        list.forEach((k) => {
+            const text = k.text;
+            const key = norm(text);
+            const count = k.count || 1; // Fallback to 1 if no count exists
+
+            if (!allKeywords[key]) {
+                allKeywords[key] = { 
+                    text: text, 
+                    a1: isA1, 
+                    a2: !isA1, 
+                    totalCount: count 
+                };
+            } else {
+                if (isA1) allKeywords[key].a1 = true;
+                else allKeywords[key].a2 = true;
+                allKeywords[key].totalCount += count; // Add up counts for shared keywords
+            }
+        });
+    };
+
+    // Process top 10 keywords from each author (increased from 8 for better cloud)
+    processList(k1.slice(0, 10), true);
+    processList(k2.slice(0, 10), false);
+
+    const cloudData = Object.values(allKeywords).sort((a,b) => b.totalCount - a.totalCount);
+
+    if (cloudData.length === 0) return <div style={noDataState}>No keyword data available.</div>;
+
+    // --- SCALING LOGIC ---
+    // Find min and max counts to scale font size
+    const counts = cloudData.map(k => k.totalCount);
+    const minC = Math.min(...counts);
+    const maxC = Math.max(...counts);
+    const range = maxC - minC || 1;
+    
+    // Font settings (pixels)
+    const MIN_FONT = 12;
+    const MAX_FONT = 32;
+
+    return (
+        <div style={chartContainer}>
+            <div style={legendWrap}>
+                <div style={legendItem}><span style={{ ...legendDot, background: COLOR_A1 }}></span> {author1.name} Only</div>
+                <div style={legendItem}><span style={{ ...legendDot, background: COLOR_A2 }}></span> {author2.name} Only</div>
+                <div style={legendItem}><span style={{ ...legendDot, background: COLOR_SHARED }}></span> Shared Interest</div>
+            </div>
+            
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", justifyContent: "center", alignItems: "center", padding: "20px 0" }}>
+                {cloudData.map((k, i) => {
+                    let bg = "#F1F5F9"; 
+                    let color = "#64748B"; 
+                    let border = "transparent";
+
+                    if (k.a1 && k.a2) { 
+                        bg = COLOR_SHARED_BG; color = COLOR_SHARED; border = COLOR_SHARED; 
+                    } else if (k.a1) { 
+                        bg = COLOR_A1_BG; color = COLOR_A1; border = COLOR_A1; 
+                    } else if (k.a2) { 
+                        bg = COLOR_A2_BG; color = COLOR_A2; border = COLOR_A2; 
+                    }
+
+                    // Calculate Font Size based on Count
+                    const size = MIN_FONT + ((k.totalCount - minC) / range) * (MAX_FONT - MIN_FONT);
+                    const isBig = size > 24;
+
+                    return (
+                        <span key={i} style={{ 
+                            fontSize: `${Math.round(size)}px`, 
+                            backgroundColor: bg, 
+                            color: color, 
+                            border: `1px solid ${border}`,
+                            padding: isBig ? "8px 20px" : "4px 12px", // Bigger padding for bigger words
+                            borderRadius: "99px", 
+                            fontWeight: isBig ? 800 : 600,
+                            textTransform: "capitalize",
+                            lineHeight: "1",
+                            animation: `fadeIn 0.5s ease forwards ${i * 0.05}s`
+                        }}>
+                            {k.text}
+                            {/* Optional: Show count for very big items */}
+                            {isBig && <span style={{fontSize: "0.6em", opacity: 0.7, marginLeft: 6}}>x{k.totalCount}</span>}
+                        </span>
+                    )
+                })}
+            </div>
+            <style>{`@keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }`}</style>
+        </div>
+    );
+}
+
 function TopVenuesTable({ author1, author2 }) {
-    // Helper to get top 5 venues for a SINGLE author
     const getTopVenues = (author) => {
         const counts = {};
         if (!author?.fullReport?.papers) return [];
-        
         author.fullReport.papers.forEach(p => {
             const v = p.venue ? p.venue.replace(/\s+\d+.*$/, '').trim() : "Unknown";
             if (v === "Unknown" || v.length < 3) return;
             counts[v] = (counts[v] || 0) + 1;
         });
-
-        // Convert to array, sort desc, take top 5
-        return Object.entries(counts)
-            .map(([name, count]) => ({ name, count }))
-            .sort((a, b) => b.count - a.count)
-            .slice(0, 5);
+        return Object.entries(counts).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count).slice(0, 5);
     };
 
     const list1 = getTopVenues(author1);
     const list2 = getTopVenues(author2);
-    
-    // Determine how many rows we need (max 5)
     const maxRows = Math.max(list1.length, list2.length);
-    const rows = Array.from({ length: maxRows }); // [undefined, undefined, ...]
+    const rows = Array.from({ length: maxRows });
 
     if (maxRows === 0) return <div style={noDataState}>No venue data found for either author.</div>;
 
@@ -226,16 +317,9 @@ function TopVenuesTable({ author1, author2 }) {
              <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: "0", fontSize: "14px", tableLayout: "fixed" }}>
                 <thead>
                     <tr>
-                        {/* Header Author 1 */}
-                        <th colSpan={2} style={{ textAlign: "left", padding: "12px", borderBottom: `2px solid ${COLOR_A1}`, color: COLOR_A1 }}>
-                            {author1.name}
-                        </th>
-                        {/* Spacer Column */}
+                        <th colSpan={2} style={{ textAlign: "left", padding: "12px", borderBottom: `2px solid ${COLOR_A1}`, color: COLOR_A1 }}>{author1.name}</th>
                         <th style={{ width: "20px", borderBottom: "2px solid #E2E8F0" }}></th>
-                        {/* Header Author 2 */}
-                        <th colSpan={2} style={{ textAlign: "left", padding: "12px", borderBottom: `2px solid ${COLOR_A2}`, color: COLOR_A2 }}>
-                            {author2.name}
-                        </th>
+                        <th colSpan={2} style={{ textAlign: "left", padding: "12px", borderBottom: `2px solid ${COLOR_A2}`, color: COLOR_A2 }}>{author2.name}</th>
                     </tr>
                     <tr style={{ fontSize: "11px", color: "#64748B", textTransform: "uppercase" }}>
                         <th style={{ textAlign: "left", padding: "8px 12px", borderBottom: "1px solid #E2E8F0", width: "35%" }}>Venue</th>
@@ -247,29 +331,14 @@ function TopVenuesTable({ author1, author2 }) {
                 </thead>
                 <tbody>
                     {rows.map((_, i) => {
-                        const item1 = list1[i];
-                        const item2 = list2[i];
-                        
+                        const item1 = list1[i]; const item2 = list2[i];
                         return (
                             <tr key={i}>
-                                {/* Author 1 Data */}
-                                <td style={{ padding: "10px 12px", borderBottom: "1px solid #F8FAFC", color: "#1E293B", fontWeight: 600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }} title={item1?.name}>
-                                    {item1 ? item1.name : ""}
-                                </td>
-                                <td style={{ padding: "10px 12px", textAlign: "right", borderBottom: "1px solid #F8FAFC" }}>
-                                    {item1 && <span style={{ backgroundColor: COLOR_A1_BG, color: COLOR_A1, padding: "2px 8px", borderRadius: "4px", fontSize: "11px", fontWeight: 700 }}>{item1.count}</span>}
-                                </td>
-
-                                {/* Spacer */}
+                                <td style={{ padding: "10px 12px", borderBottom: "1px solid #F8FAFC", color: "#1E293B", fontWeight: 600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }} title={item1?.name}>{item1 ? item1.name : ""}</td>
+                                <td style={{ padding: "10px 12px", textAlign: "right", borderBottom: "1px solid #F8FAFC" }}>{item1 && <span style={{ backgroundColor: COLOR_A1_BG, color: COLOR_A1, padding: "2px 8px", borderRadius: "4px", fontSize: "11px", fontWeight: 700 }}>{item1.count}</span>}</td>
                                 <td style={{ borderBottom: "1px solid #F8FAFC", borderLeft: "1px dashed #E2E8F0" }}></td>
-
-                                {/* Author 2 Data */}
-                                <td style={{ padding: "10px 12px", borderBottom: "1px solid #F8FAFC", color: "#1E293B", fontWeight: 600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }} title={item2?.name}>
-                                    {item2 ? item2.name : ""}
-                                </td>
-                                <td style={{ padding: "10px 12px", textAlign: "right", borderBottom: "1px solid #F8FAFC" }}>
-                                    {item2 && <span style={{ backgroundColor: COLOR_A2_BG, color: COLOR_A2, padding: "2px 8px", borderRadius: "4px", fontSize: "11px", fontWeight: 700 }}>{item2.count}</span>}
-                                </td>
+                                <td style={{ padding: "10px 12px", borderBottom: "1px solid #F8FAFC", color: "#1E293B", fontWeight: 600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }} title={item2?.name}>{item2 ? item2.name : ""}</td>
+                                <td style={{ padding: "10px 12px", textAlign: "right", borderBottom: "1px solid #F8FAFC" }}>{item2 && <span style={{ backgroundColor: COLOR_A2_BG, color: COLOR_A2, padding: "2px 8px", borderRadius: "4px", fontSize: "11px", fontWeight: 700 }}>{item2.count}</span>}</td>
                             </tr>
                         );
                     })}
@@ -325,49 +394,6 @@ function VenueTornadoChart({ author1, author2 }) {
                 })}
             </div>
             <div style={{ textAlign: "center", fontSize: "11px", fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", marginTop: "20px" }}>Number of Publications</div>
-        </div>
-    );
-}
-
-function KeywordCloud({ author1, author2 }) {
-    const k1 = author1?.fullReport?.metrics?.keywords || [];
-    const k2 = author2?.fullReport?.metrics?.keywords || [];
-    const norm = (str) => str.toLowerCase().trim();
-    const allKeywords = {};
-    k1.slice(0, 8).forEach((k, idx) => {
-        const text = k.text; const key = norm(text);
-        allKeywords[key] = { text: text, a1: true, a2: false, score: (8 - idx) }; 
-    });
-    k2.slice(0, 8).forEach((k, idx) => {
-        const text = k.text; const key = norm(text);
-        if (allKeywords[key]) { allKeywords[key].a2 = true; allKeywords[key].score += (8 - idx); } 
-        else { allKeywords[key] = { text: text, a1: false, a2: true, score: (8 - idx) }; }
-    });
-    const cloudData = Object.values(allKeywords).sort((a,b) => b.score - a.score);
-    if (cloudData.length === 0) return <div style={noDataState}>No keyword data available.</div>;
-
-    return (
-        <div style={chartContainer}>
-            <div style={legendWrap}>
-                <div style={legendItem}><span style={{ ...legendDot, background: COLOR_A1 }}></span> {author1.name} Only</div>
-                <div style={legendItem}><span style={{ ...legendDot, background: COLOR_A2 }}></span> {author2.name} Only</div>
-                <div style={legendItem}><span style={{ ...legendDot, background: COLOR_SHARED }}></span> Shared Interest</div>
-            </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", justifyContent: "center", padding: "20px 0" }}>
-                {cloudData.map((k, i) => {
-                    let bg = "#F1F5F9"; let color = "#64748B"; let border = "transparent";
-                    if (k.a1 && k.a2) { bg = COLOR_SHARED_BG; color = COLOR_SHARED; border = COLOR_SHARED; } 
-                    else if (k.a1) { bg = COLOR_A1_BG; color = COLOR_A1; border = COLOR_A1; } 
-                    else if (k.a2) { bg = COLOR_A2_BG; color = COLOR_A2; border = COLOR_A2; }
-                    const fontSize = 13 + Math.min(k.score, 10); 
-                    return (
-                        <span key={i} style={{ fontSize: `${fontSize}px`, backgroundColor: bg, color: color, border: `1px solid ${border}`, padding: "6px 16px", borderRadius: "99px", fontWeight: k.a1 && k.a2 ? 800 : 600, textTransform: "capitalize", animation: `fadeIn 0.5s ease forwards ${i * 0.05}s` }}>
-                            {k.text}
-                        </span>
-                    )
-                })}
-            </div>
-            <style>{`@keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }`}</style>
         </div>
     );
 }

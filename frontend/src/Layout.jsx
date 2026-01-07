@@ -4,7 +4,7 @@ import { FileText, Bookmark, Boxes, UploadCloud, GitCompare } from 'lucide-react
 
 const Layout = () => {
   const location = useLocation();
-  const primaryBlue = "#1e40af"; 
+  const primaryBlue = "#044168"; 
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", fontFamily: "'Inter', sans-serif" }}>

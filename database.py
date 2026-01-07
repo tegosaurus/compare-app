@@ -1,4 +1,5 @@
 import os
+import re
 from sqlalchemy import create_engine, Table, Column, Integer, Float, String, Text, ForeignKey, MetaData, DateTime
 from sqlalchemy.dialects.postgresql import JSONB, insert
 from dotenv import load_dotenv
@@ -164,14 +165,10 @@ def update_publication_venues(author_id: str, df):
                 )
             )
 
-# --- uploadButton addition ---
-
 def update_quality_list_in_db(df, list_type, mode="replace"):
     """
     Updates the journals_quality or conferences_quality table from a dataframe.
     """
-    import re
-
     # Select Target Table
     if list_type == "journal":
         target_table = journals_quality

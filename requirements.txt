@@ -68,6 +68,7 @@ PyJWT==2.10.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.1
 python-Levenshtein==0.27.3
+python-multipart==0.0.21
 pytz==2025.2
 pyvis==0.3.2
 PyYAML==6.0.3

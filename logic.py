@@ -11,6 +11,7 @@ from fetchProfile import get_scholar_profile
 def normalize_text(s: str) -> str:
     if not isinstance(s, str): return ""
     s = s.lower()
+    s = s.replace('-', ' ')
     s = re.sub(r'\b\d+(st|nd|rd|th)\b', '', s)
     s = re.sub(r'\b\d+[-–]\d+\b', '', s) 
     s = re.sub(r'\b(pp|vol|no|issue)\.?\s*\d+', '', s)
@@ -88,9 +89,10 @@ def extract_author_id(url):
     match = re.search(r"user=([\w-]+)", url)
     return match.group(1) if match else None
 
-def load_or_fetch_author(author_id: str, refresh_days: int = 7, force_refresh: bool = False):
+def load_or_fetch_author(author_id: str, refresh_days: int = 7, force_refresh: bool = False, progress_callback=None):
     # if NOT forcing refresh, try to load from db
     if not force_refresh:
+        if progress_callback: progress_callback(10)
         profile = load_author_profile(author_id)
 
         if profile:
@@ -101,10 +103,14 @@ def load_or_fetch_author(author_id: str, refresh_days: int = 7, force_refresh: b
                 
                 # check if cache is still valid
                 if (datetime.now(timezone.utc) - last_scraped).days < refresh_days:
+                    if progress_callback: progress_callback(100)
                     return profile
 
+    if progress_callback: progress_callback(15)
     # if force_refresh is True OR cache is old/missing, scrape fresh
-    scraped_data = get_scholar_profile(author_id)
+    scraped_data = get_scholar_profile(author_id, progress_callback=progress_callback)
+
+    if progress_callback: progress_callback(55)
     save_author_profile(scraped_data)
     
     # reload from DB to ensure clean format
@@ -273,29 +279,34 @@ def match_quality(venue: str, is_cs_ai=False):
 
     return (hint, None, "-", 0.0, "No match")
 
-def evaluate_author_data_headless(data, cs_ai):
+def evaluate_author_data_headless(data, cs_ai, progress_callback=None):
     df = pd.DataFrame(data["publications"])
 
     df["year"] = pd.to_numeric(df.get("year"), errors="coerce")
     df["citations"] = pd.to_numeric(df.get("citations"), errors="coerce").fillna(0).astype(int)
     
-    # see if rank column exists
     if "rank" not in df.columns:
         df["rank"] = None 
 
     # --- OPTIMIZED VENUE MATCHING (strict NULL/empty check) ---
-    
     # match ONLY if rank is NULL/empty
     # this automatically SKIPS strings like "NaN", "-", "N/A", "Q1", etc.
     needs_match_mask = df["rank"].isna() | (df["rank"] == "")
     
     # get venues ONLY for empty rows
     venues_to_check = df.loc[needs_match_mask, "venue"].dropna()
-    unique_venues_to_check = set(venues_to_check)
+    unique_venues_to_check = list(set(venues_to_check))
     
     # run matching logic ONLY on specific unknown venues
     # (if all ranks are "-", "NaN", or "Q1", this runs 0 times = INSTANT)
-    venue_cache = {v: match_quality(v, cs_ai) for v in unique_venues_to_check}
+    venue_cache = {}
+    total_venues = len(unique_venues_to_check)
+
+    for i, venue in enumerate(unique_venues_to_check):
+        venue_cache[venue] = match_quality(venue, cs_ai)
+        if progress_callback:
+            pct = 60 + int((i / total_venues) * 30)
+            progress_callback(pct)
 
     # apply results back to df
     if not venues_to_check.empty:
@@ -316,8 +327,6 @@ def evaluate_author_data_headless(data, cs_ai):
         df.loc[needs_match_mask, "source"] = new_data["calc_source"]
 
         # --- SAVE TO DATABASE ---
-        # save immediately so we never have to calculate these specific rows again
-        # this stops infinite loop of recalculation
         try:
             update_publication_venues(data["author_id"], df[needs_match_mask])
         except Exception as e:

@@ -1,35 +1,92 @@
-import { useState, useEffect, useMemo } from 'react';
-import { useMutation } from '@tanstack/react-query';
-import { analyzeProfile } from '../api';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Search, Bookmark, Star, X, Check, 
-  TrendingUp, Users, Award, Zap, FileText, Hash, HelpCircle, Loader2,
-  Clock, ArrowUp, ArrowDown, ArrowUpDown, RotateCcw, LayoutDashboard, List, Lock,
-  ChevronLeft, RefreshCw 
+  TrendingUp, Award, Zap, FileText, Hash, HelpCircle, Loader2,
+  Clock, LayoutDashboard, List,
+  ChevronLeft, RefreshCw
 } from 'lucide-react';
+import { useLocation } from "react-router-dom";
 
 import ContributionChart from './ContributionChart';
 import ProductivityChart from './ProductivityChart'; 
 import PublicationAnalytics from './PublicationAnalytics';
+import PublicationsTable from './PublicationsTable';
 
 // --- GLOBAL MEMORY ---
 let cachedReport = null;
 
+// --- TOOLTIP COMPONENT ---
+function Tooltip({ text }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div style={{ position: "relative", display: "inline-flex", alignItems: "center" }}
+         onMouseEnter={() => setShow(true)} onMouseLeave={() => setShow(false)}>
+      <HelpCircle size={13} color="#b3b3b3ff" style={{ cursor: "help" }} />
+      {show && (
+        <div style={{
+          position: "absolute", bottom: "100%", left: "50%", transform: "translateX(-50%)",
+          marginBottom: "8px", width: "180px", padding: "8px 12px", backgroundColor: "#0F172A",
+          color: "white", fontSize: "11px", borderRadius: "6px", zIndex: 1000, boxShadow: "0 10px 15px -3px rgba(0,0,0,0.3)",
+          lineHeight: "1.4", fontWeight: "400", textAlign: "center"
+        }}>
+          {text}
+          <div style={{ position: "absolute", top: "100%", left: "50%", transform: "translateX(-50%)", border: "5px solid transparent", borderTopColor: "#0F172A" }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- REFRESH BUTTON WITH HOVER TOOLTIP ---
+function RefreshButton({ onClick, isLoading }) {
+  const [isHovered, setIsHovered] = useState(false);
+
+  return (
+    <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+      {isHovered && !isLoading && (
+        <div style={{
+          position: "absolute", right: "100%", marginRight: "10px", whiteSpace: "nowrap",
+          backgroundColor: "#0F172A", color: "white", padding: "4px 8px", borderRadius: "4px",
+          fontSize: "10px", fontWeight: "600", pointerEvents: "none", zIndex: 10
+        }}>
+          Re-scrape for fresh results
+          <div style={{ position: "absolute", top: "50%", left: "100%", transform: "translateY(-50%)", border: "4px solid transparent", borderLeftColor: "#0F172A" }} />
+        </div>
+      )}
+      <button 
+        onClick={onClick} 
+        disabled={isLoading}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        style={{ background: "none", border: "none", cursor: isLoading ? "default" : "pointer", padding: "1px", display: "flex", alignItems: "center", borderRadius: "4px", backgroundColor: isHovered && !isLoading ? "#f1f5f9" : "transparent" }}
+      >
+        <RefreshCw size={15} strokeWidth={2} color="#0F172A" className={isLoading ? "animate-spin" : ""} />
+      </button>
+    </div>
+  );
+}
+
 export default function GenerateReport() {
+  const location = useLocation();
   const [url, setUrl] = useState("");
   const [reportData, setReportData] = useState(cachedReport);
-  const [progress, setProgress] = useState(0);
-  const [isFocused, setIsFocused] = useState(false);
   
+  const [jobId, setJobId] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [progress, setProgress] = useState(0);
+
+  const [isFocused, setIsFocused] = useState(false);
   const [recents, setRecents] = useState([]); 
   const [activeTab, setActiveTab] = useState("overview"); 
 
-  // Modal States
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [showSuccessToast, setShowSuccessToast] = useState(false);
   const [rating, setRating] = useState(0);
   const [hoverRating, setHoverRating] = useState(0);
   const [comment, setComment] = useState("");
   const [isSaved, setIsSaved] = useState(false);
+
+  const startYear = new Date().getFullYear() - 5;
 
   useEffect(() => {
     const localRecents = JSON.parse(localStorage.getItem("search_recents") || "[]");
@@ -39,66 +96,111 @@ export default function GenerateReport() {
   useEffect(() => {
     if (reportData) {
       const history = JSON.parse(localStorage.getItem("compare_history") || "[]");
-      const alreadySaved = history.some(item => item.id === reportData.profile.id);
-      setIsSaved(alreadySaved);
-      if(alreadySaved) {
-         const item = history.find(i => i.id === reportData.profile.id);
-         setRating(item.userRating || 0);
-         setComment(item.userComment || "");
+      const savedItem = history.find(item => item.id === reportData.profile.id);
+      
+      if (savedItem) {
+        setIsSaved(true);
+        setRating(savedItem.userRating || 0);
+        setComment(savedItem.userComment || "");
+      } else {
+        setIsSaved(false);
+        setRating(0);
+        setComment("");
       }
     }
   }, [reportData]);
+
+  useEffect(() => {
+    if (location.state?.report) {
+      const incomingReport = location.state.report;
+      setReportData(incomingReport);
+      cachedReport = incomingReport;
+      setUrl(`https://scholar.google.com/citations?user=${incomingReport.profile.id}&hl=en`);
+      window.history.replaceState({}, document.title);
+    }
+  }, [location.state, setReportData, setUrl]);
 
   const handleResetView = () => {
     setReportData(null);
     cachedReport = null;
     setUrl("");
     setProgress(0);
+    setJobId(null);
+    setIsLoading(false);
+    setRating(0);
+    setComment("");
   };
 
-  const mutation = useMutation({
-    mutationFn: ({ link, forceRefresh }) => analyzeProfile(link, forceRefresh), 
-    onMutate: () => {
-      setProgress(0);
-      if (!reportData) {
-          setReportData(null);
-          cachedReport = null; 
-          setActiveTab("overview"); 
-      }
-      setIsSaved(false); 
-    },
-    onSuccess: (data) => {
-      setProgress(100);
-      setTimeout(() => {
-        setReportData(data);
-        cachedReport = data;
-        if (!reportData || reportData.profile.id !== data.profile.id) {
-            setRating(0);
-            setComment("");
-        }
-        setProgress(0); 
-        addToRecents(data);
-      }, 600);
-    },
-    onError: () => setProgress(0)
-  });
+  const startAnalysis = async (link, forceRefresh = false) => {
+    setIsLoading(true);
+    setProgress(0);
+    setReportData(null);
+    setActiveTab("overview");
+    setIsSaved(false);
+    setRating(0);
+    setComment("");
+
+    try {
+        const response = await fetch("http://localhost:8000/analyze/start", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url: link, forceRefresh: forceRefresh }),
+        });
+        if (!response.ok) throw new Error("Failed to start analysis");
+        const data = await response.json();
+        setJobId(data.job_id);
+    } catch (error) {
+        console.error(error);
+        setIsLoading(false);
+        alert("Error starting analysis. Please check the URL.");
+    }
+  };
 
   const handleSearch = (e) => {
     e.preventDefault(); 
-    if (url.trim()) mutation.mutate({ link: url, forceRefresh: false });
+    if (url.trim()) startAnalysis(url, false);
   };
 
   const handleRecentClick = (id) => {
     const link = `https://scholar.google.com/citations?user=${id}&hl=en`;
     setUrl(link);
-    mutation.mutate({ link, forceRefresh: false });
+    startAnalysis(link, false);
   };
 
   const handleRefreshData = () => {
     if (!reportData) return;
     const link = `https://scholar.google.com/citations?user=${reportData.profile.id}&hl=en`;
-    mutation.mutate({ link, forceRefresh: true }); 
+    startAnalysis(link, true); 
   };
+
+  useEffect(() => {
+    if (!jobId) return;
+    const interval = setInterval(async () => {
+        try {
+            const res = await fetch(`http://localhost:8000/analyze/status/${jobId}`);
+            if (!res.ok) return;
+            const data = await res.json();
+            if (data.progress) setProgress(data.progress);
+            if (data.status === "completed") {
+                clearInterval(interval);
+                setReportData(data.result);
+                cachedReport = data.result;
+                setJobId(null);
+                setIsLoading(false);
+                setProgress(100);
+                addToRecents(data.result);
+            } else if (data.status === "failed") {
+                clearInterval(interval);
+                setJobId(null);
+                setIsLoading(false);
+                alert("Analysis failed: " + (data.error || "Unknown error"));
+            }
+        } catch (err) {
+            console.error("Polling Error:", err);
+        }
+    }, 500);
+    return () => clearInterval(interval);
+  }, [jobId]);
 
   const addToRecents = (data) => {
     let currentRecents = JSON.parse(localStorage.getItem("search_recents") || "[]");
@@ -116,34 +218,39 @@ export default function GenerateReport() {
     setRecents(trimmedRecents);
   };
 
-  useEffect(() => {
-    let interval;
-    if (mutation.isPending) {
-      interval = setInterval(() => {
-        setProgress((prev) => {
-          const increment = prev < 50 ? 5 : prev < 80 ? 2 : 0.5;
-          return Math.min(prev + increment, 95);
-        });
-      }, 200); 
-    } else { clearInterval(interval); }
-    return () => clearInterval(interval);
-  }, [mutation.isPending]);
-
   const handleToggleSave = () => {
+    if (!reportData) return;
     const history = JSON.parse(localStorage.getItem("compare_history") || "[]");
     if (isSaved) {
         const updatedHistory = history.filter(item => item.id !== reportData.profile.id);
         localStorage.setItem("compare_history", JSON.stringify(updatedHistory));
         setIsSaved(false);
-    } else { setIsModalOpen(true); }
+        setRating(0);
+        setComment("");
+    } else { 
+        setIsModalOpen(true); 
+    }
+  };
+
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    if (!isSaved) {
+      setRating(0);
+      setComment("");
+    } else {
+        const history = JSON.parse(localStorage.getItem("compare_history") || "[]");
+        const savedItem = history.find(item => item.id === reportData.profile.id);
+        if (savedItem) {
+            setRating(savedItem.userRating || 0);
+            setComment(savedItem.userComment || "");
+        }
+    }
   };
 
   const handleConfirmSave = () => {
       if (!reportData) return;
       const history = JSON.parse(localStorage.getItem("compare_history") || "[]");
       const existingIndex = history.findIndex(h => h.id === reportData.profile.id);
-      
-      // Include 'fullReport' which contains
       const entry = {
           id: reportData.profile.id,
           name: reportData.profile.name,
@@ -155,15 +262,24 @@ export default function GenerateReport() {
           userComment: comment,
           fullReport: reportData 
       };
-
       if (existingIndex > -1) { history[existingIndex] = entry; } else { history.unshift(entry); }
       localStorage.setItem("compare_history", JSON.stringify(history));
       setIsModalOpen(false);
       setIsSaved(true);
+      setShowSuccessToast(true);
+      setTimeout(() => setShowSuccessToast(false), 3000);
     };
 
   return (
     <div style={{ width: "100%", backgroundColor: "#F8FAFC", minHeight: "100vh", paddingBottom: "60px", fontFamily: "Inter, -apple-system, sans-serif" }}>
+      
+      {showSuccessToast && (
+        <div style={{ position: "fixed", top: "24px", right: "24px", backgroundColor: "#0F172A", color: "white", padding: "10px 18px", borderRadius: "10px", display: "flex", alignItems: "center", gap: "10px", boxShadow: "0 10px 15px rgba(0,0,0,0.2)", zIndex: 2000 }}>
+          <Check size={16} color="#10B981" strokeWidth={3} />
+          <span style={{ fontSize: "13px", fontWeight: "600" }}>Profile saved to history</span>
+        </div>
+      )}
+
       <div style={{ maxWidth: "1280px", margin: "0 auto", paddingTop: "40px" }}>
         
         {!reportData && (
@@ -171,119 +287,149 @@ export default function GenerateReport() {
             <div style={{ maxWidth: "680px", margin: "0 auto 12px", position: "sticky", top: "20px", zIndex: 50 }}>
               <form onSubmit={handleSearch} style={{ display: "flex", alignItems: "center", backgroundColor: "white", borderRadius: "16px", padding: "6px", boxShadow: isFocused ? "0 12px 35px -8px rgba(15, 23, 42, 0.15), 0 0 0 2px #0F172A" : "0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03)", border: "1px solid #E2E8F0", transition: "all 0.2s" }}>
                 <div style={{ paddingLeft: "14px" }}><Search size={18} color={isFocused ? "#0F172A" : "#94A3B8"} /></div>
-                <input type="text" placeholder="Paste Google Scholar profile URL..." value={url} onChange={(e) => setUrl(e.target.value)} onFocus={() => setIsFocused(true)} onBlur={() => setIsFocused(false)} disabled={mutation.isPending} style={{ flex: 1, height: "40px", border: "none", outline: "none", fontSize: "14px", marginLeft: "10px", width: "100%" }} />
-                <button type="submit" disabled={mutation.isPending || !url.trim()} style={{ height: "36px", padding: "0 20px", borderRadius: "10px", backgroundColor: mutation.isPending ? "#94A3B8" : "#0F172A", color: "white", border: "none", cursor: "pointer", fontWeight: "600" }}>
-                  {mutation.isPending ? <Loader2 className="animate-spin" size={14} /> : <span>Analyze</span>}
+                <input type="text" placeholder="Paste Google Scholar profile URL..." value={url} onChange={(e) => setUrl(e.target.value)} onFocus={() => setIsFocused(true)} onBlur={() => setIsFocused(false)} disabled={isLoading} style={{ flex: 1, height: "40px", border: "none", outline: "none", fontSize: "14px", marginLeft: "10px", width: "100%" }} />
+                <button type="submit" disabled={isLoading || !url.trim()} style={{ height: "36px", padding: "0 20px", borderRadius: "10px", backgroundColor: isLoading ? "#94A3B8" : "#0F172A", color: "white", border: "none", cursor: "pointer", fontWeight: "600" }}>
+                  {isLoading ? <Loader2 className="animate-spin" size={14} /> : <span>Analyze</span>}
                 </button>
               </form>
             </div>
-            <div style={{ textAlign: "center", marginBottom: "40px", display: "flex", justifyContent: "center", gap: "16px", fontSize: "11px", color: "#64748B", fontWeight: "500" }}>
-                <span style={{ display: "flex", alignItems: "center", gap: "4px" }}><Zap size={12} fill="#F59E0B" color="#F59E0B" /> Real-time extraction</span>
-                <span style={{ width: "1px", height: "14px", backgroundColor: "#CBD5E1" }}></span>
-                <span style={{ display: "flex", alignItems: "center", gap: "4px" }}><Lock size={11} /> No login required</span>
-            </div>
-          </>
-        )}
-
-        {mutation.isPending && (
-          <div style={{ marginBottom: "20px", textAlign: "center", maxWidth: "400px", margin: "0 auto 30px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "6px", fontSize: "12px", color: "#64748B" }}>
-              <span>{reportData ? "Refreshing Data..." : "Analysing..."}</span>
-              <span style={{ color: "#0F172A" }}>{Math.round(progress)}%</span>
-            </div>
-            <div style={{ width: "100%", height: "6px", backgroundColor: "#E2E8F0", borderRadius: "10px", overflow: "hidden" }}>
-              <div style={{ width: `${progress}%`, height: "100%", backgroundColor: "#0F172A", transition: "width 0.3s" }} />
-            </div>
-          </div>
-        )}
-
-        {!reportData && !mutation.isPending && (
-          <div className="animate-fade-in">
-            {recents.length > 0 && (
-              <div style={{ marginBottom: "50px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "16px", paddingLeft: "4px" }}>
-                    <Clock size={16} color="#64748B" />
-                    <h3 style={{ fontSize: "12px", fontWeight: "700", color: "#475569", textTransform: "uppercase", letterSpacing: "0.05em" }}>Jump Back In</h3>
+            {isLoading && (
+              <div style={{ marginBottom: "20px", textAlign: "center", maxWidth: "400px", margin: "0 auto 30px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "6px", fontSize: "12px", color: "#64748B" }}>
+                  <span>{reportData ? "Refreshing Data..." : "Analysing..."}</span>
+                  <span style={{ color: "#0F172A" }}>{Math.round(progress)}%</span>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "16px" }}>
-                  {recents.map((profile) => ( <SavedProfileCard key={profile.id} profile={profile} onClick={() => handleRecentClick(profile.id)} /> ))}
+                <div style={{ width: "100%", height: "6px", backgroundColor: "#E2E8F0", borderRadius: "10px", overflow: "visible" }}>
+                  <div style={{ width: `${progress}%`, height: "100%", backgroundColor: "#0F172A", transition: "width 0.8s ease-out" }} /> 
                 </div>
               </div>
             )}
-            <div style={{ textAlign: "center" }}>
-              <div style={{ marginBottom: "24px" }}>
-                {recents.length === 0 && <h2 style={{ fontSize: "24px", fontWeight: "800", color: "#0F172A", marginBottom: "8px" }}>Research Intelligence Engine</h2>}
-                <p style={{ fontSize: "13px", color: "#64748B", fontWeight: "500", textTransform: "uppercase" }}>How it works</p>
+            {!isLoading && (
+              <div className="animate-fade-in">
+                {recents.length > 0 && (
+                  <div style={{ marginBottom: "50px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "16px", paddingLeft: "4px" }}>
+                        <Clock size={16} color="#64748B" />
+                        <h3 style={{ fontSize: "12px", fontWeight: "700", color: "#475569", textTransform: "uppercase", letterSpacing: "0.05em" }}>Jump Back In</h3>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "16px" }}>
+                      {recents.map((profile) => ( <SavedProfileCard key={profile.id} profile={profile} onClick={() => handleRecentClick(profile.id)} /> ))}
+                    </div>
+                  </div>
+                )}
+                <div style={{ textAlign: "center" }}>
+                   {recents.length === 0 && <h2 style={{ fontSize: "24px", fontWeight: "800", color: "#0F172A", marginBottom: "8px" }}>Research Intelligence Engine</h2>}
+                   <p style={{ fontSize: "13px", color: "#64748B", fontWeight: "500", textTransform: "uppercase", marginBottom: "24px" }}>How it works</p>
+                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "16px" }}>
+                      <StepCard num="01" title="Locate Profile" text="Go to Google Scholar and copy the researcher's URL." icon={<Search size={18} />} />
+                      <StepCard num="02" title="Extract Data" text="Our engine parses citations, h-index, and hidden metrics." icon={<Zap size={18} />} />
+                      <StepCard num="03" title="Reveal Impact" text="See venue rankings, network graphs, and true influence." icon={<TrendingUp size={18} />} />
+                   </div>
+                </div>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "16px" }}>
-                <StepCard num="01" title="Locate Profile" text="Go to Google Scholar and copy the researcher's URL." icon={<Search size={18} />} />
-                <StepCard num="02" title="Extract Data" text="Our engine parses citations, h-index, and hidden metrics." icon={<Zap size={18} />} />
-                <StepCard num="03" title="Reveal Impact" text="See venue rankings, network graphs, and true influence." icon={<TrendingUp size={18} />} />
-              </div>
-            </div>
-          </div>
+            )}
+          </>
         )}
 
-        {reportData && !mutation.isPending && (
+        {reportData && !isLoading && (
           <div className="animate-fade-in">
-             <div style={{ marginBottom: "20px" }}>
+             <div style={{ marginBottom: "16px" }}>
                 <button onClick={handleResetView} style={{ background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: "6px", color: "#64748B", fontSize: "13px", fontWeight: "600", padding: "0" }}>
                     <ChevronLeft size={16} /> Search Another Researcher
                 </button>
             </div>
 
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "24px", borderBottom: "1px solid #E2E8F0", paddingBottom: "24px" }}>
-              <div>
-                <div style={{ display: "flex", alignItems: "center", gap: "16px", marginBottom: "6px" }}>
-                    <h1 style={{ fontSize: "28px", fontWeight: "800", color: "#0F172A", lineHeight: "1.1" }}>{reportData.profile.name}</h1>
-                    <button onClick={handleToggleSave} style={{ display: "flex", alignItems: "center", gap: "6px", padding: "6px 16px", borderRadius: "24px", border: isSaved ? "1px solid #0F172A" : "1px solid #E2E8F0", backgroundColor: isSaved ? "#0F172A" : "white", color: isSaved ? "white" : "#0F172A", fontWeight: "600", fontSize: "12px", cursor: "pointer" }}>
-                        {isSaved ? <Check size={12} /> : <Bookmark size={12} />} {isSaved ? "Saved" : "Save"}
-                    </button>
+            <div style={{ display: "flex", flexDirection: "column", marginBottom: "20px", borderBottom: "1px solid #E2E8F0", paddingBottom: "24px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "2px" }}>
+                  <h1 style={{ fontSize: "27px", fontWeight: "800", color: "#0F172A", lineHeight: "1.1", margin: 0 }}>{reportData.profile.name}</h1>
+                  <button onClick={handleToggleSave} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "4px", padding: "0 10px", borderRadius: "20px", border: isSaved ? "none" : "1px solid #E2E8F0", backgroundColor: isSaved ? "#10B981" : "white", color: isSaved ? "white" : "#0F172A", fontWeight: "700", fontSize: "10px", cursor: "pointer", height: "20px", marginTop: "4px" }}>
+                      {isSaved ? <Check size={10} strokeWidth={3} /> : <Bookmark size={10} />} 
+                      {isSaved ? "Saved" : "Save"}
+                  </button>
+              </div>
+              
+              <p style={{ fontSize: "15px", color: "#64748B", marginBottom: "8px", fontWeight: "500" }}>{reportData.profile.affiliations || "No affiliation listed"}</p>
+              
+              <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "20px" }}>
+                <span style={{ backgroundColor: "#F1F5F9", color: "#475569", padding: "4px 10px", borderRadius: "20px", fontSize: "12px", fontWeight: "600", display: "flex", alignItems: "center", gap: "6px", border: "1px solid #E2E8F0" }}>
+                  <Award size={14} /> Academic Age: {reportData.profile.academic_age} Years
+                  </span>
+                <span style={{ fontSize: "12px", color: "#88919dff" }}>ID: {reportData.profile.id}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: "5px", marginLeft: "auto" }}>
+                  <RefreshButton onClick={handleRefreshData} isLoading={isLoading} />
+                  <span style={{ fontSize: "11px", color: "#64748B", fontStyle: "italic", fontWeight: "500" }}>
+                    Refreshed: {timeAgo(reportData.profile.last_updated)}
+                  </span>
                 </div>
-                <p style={{ fontSize: "15px", color: "#64748B", maxWidth: "700px" }}>{reportData.profile.affiliations || "No affiliation listed"}</p>
-                <div style={{ display: "flex", gap: "12px", marginTop: "16px", alignItems: "center" }}>
-                  <span style={{ backgroundColor: "#F1F5F9", color: "#334155", padding: "4px 10px", borderRadius: "20px", fontSize: "12px", fontWeight: "600", display: "flex", alignItems: "center", gap: "6px" }}><Award size={14} /> Academic Age: {reportData.profile.academic_age} Years</span>
-                  <span style={{ fontSize: "12px", color: "#94A3B8" }}>ID: {reportData.profile.id}</span>
-                  <div style={{ display: "flex", alignItems: "center", gap: "6px", marginLeft: "12px" }}>
-                    <button onClick={handleRefreshData} disabled={mutation.isPending} style={{ background: "none", border: "none", cursor: "pointer", padding: "4px" }}>
-                        <RefreshCw size={14} color="#64748B" className={mutation.isPending ? "animate-spin" : ""} />
-                    </button>
-                    <span style={{ fontSize: "11px", color: "#64748B", fontStyle: "italic" }}>Last updated: {timeAgo(reportData.profile.last_updated)}</span>
-                  </div>
-                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: "8px", alignItems: "center", marginTop: "2px" }}>
+                {reportData.metrics.keywords && reportData.metrics.keywords.slice(0, 5).map((kw, idx) => (
+                  <span key={idx} style={{ fontSize: "12px", fontWeight: "600", color: "#475569", backgroundColor: "white", border: "1px solid #E2E8F0", padding: "3px 10px", borderRadius: "6px", display: "flex", alignItems: "center", gap: "7px", marginBottom: "-12px" }}>
+                    {kw.text} <span style={{ fontSize: "9px", opacity: 0.5 }}>{kw.count}</span>
+                  </span>
+                ))}
               </div>
             </div>
 
-            {/* KEYWORDS CONTAINER */}
-            <div style={{ marginBottom: "32px", padding: "24px", backgroundColor: "white", borderRadius: "12px", border: "1px solid #E2E8F0", boxShadow: "0 1px 2px rgba(0,0,0,0.02)" }}>
-                <div style={{ fontSize: "11px", fontWeight: "700", color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "16px", display: "flex", alignItems: "center", gap: "8px" }}>
-                    <Zap size={14} fill="#F59E0B" color="#F59E0B" /> Core Research Focus
-                </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "10px" }}>
-                    {reportData.metrics.keywords && reportData.metrics.keywords.length > 0 ? (
-                        reportData.metrics.keywords.map((kw, idx) => (
-                            <div key={idx} style={{ padding: "8px 16px", backgroundColor: idx === 0 ? "#0F172A" : "#F8FAFC", color: idx === 0 ? "white" : "#0F172A", borderRadius: "84px", fontSize: "13px", fontWeight: "600", border: "1px solid #E2E8F0", textTransform: "capitalize", display: "flex", alignItems: "center", gap: "8px" }}>
-                                {kw.text} <span style={{ opacity: 0.5, fontSize: "10px", backgroundColor: idx === 0 ? "rgba(255,255,255,0.2)" : "rgba(15,23,42,0.1)", padding: "2px 6px", borderRadius: "10px" }}>{kw.count}</span>
-                            </div>
-                        ))
-                    ) : ( <span style={{ fontSize: "13px", color: "#94A3B8", fontStyle: "italic" }}>No significant keywords extracted.</span> )}
-                </div>
-            </div>
-
-            {/* TAB NAVIGATION */}
             <div style={{ display: "flex", borderBottom: "1px solid #E2E8F0", marginBottom: "24px" }}>
               <button onClick={() => setActiveTab("overview")} style={{ padding: "10px 20px", fontSize: "14px", fontWeight: "600", color: activeTab === "overview" ? "#0F172A" : "#64748B", borderBottom: activeTab === "overview" ? "2px solid #0F172A" : "2px solid transparent", background: "none", borderTop: "none", borderLeft: "none", borderRight: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: "8px" }}><LayoutDashboard size={16} /> Impact Overview</button>
               <button onClick={() => setActiveTab("publications")} style={{ padding: "10px 20px", fontSize: "14px", fontWeight: "600", color: activeTab === "publications" ? "#0F172A" : "#64748B", borderBottom: activeTab === "publications" ? "2px solid #0F172A" : "2px solid transparent", background: "none", borderTop: "none", borderLeft: "none", borderRight: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: "8px" }}><List size={16} /> Publications Analysis</button>
             </div>
-
+            
             {activeTab === "overview" && (
               <div className="animate-fade-in">
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "16px", marginBottom: "24px" }}>
-                      <HeroCard type="success" label="Total Papers" value={reportData.metrics.total_p} icon={<FileText size={20} color="#059669" />} sub="Lifetime" />
-                      <HeroCard type="primary" label="Total Citations" value={reportData.metrics.total_c.toLocaleString()} icon={<TrendingUp size={20} color="#0F172A" />} sub={`+${reportData.metrics.recent_c || 0} recent`} />
-                      <HeroCard type="warning" label="Recent Papers" value={reportData.metrics.recent_p} icon={<Zap size={20} color="#D97706" />} sub="Last 5y" />
+                      <HeroCard type="success" label="Total Publications" value={reportData.metrics.total_p} icon={<FileText size={20} color="#0F172A" />} />
+                      <HeroCard type="primary" label="Total Citations" value={reportData.metrics.total_c.toLocaleString()} icon={<TrendingUp size={20} color="#0F172A" />} sub={`+${reportData.metrics.recent_c || 0} since ${startYear}`} />
+                      <HeroCard type="warning" label="Recent Papers" value={reportData.metrics.recent_p} icon={<Zap size={20} color="#0F172A" />} sub={`Published since ${startYear}`} />
                   </div>
-                  
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px", marginBottom: "32px" }}>
+                    <div style={{ backgroundColor: "white", borderRadius: "12px", border: "1px solid #E2E8F0", padding: "24px", boxShadow: "0 1px 2px rgba(0,0,0,0.02)" }}>
+                        <div style={{ fontSize: "12px", fontWeight: "700", color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "20px", display: "flex", alignItems: "center", gap: "5px" }}>
+                          <Hash size={14} /> Citation Indices
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between" }}>
+                            <MiniStat label="H-Index" value={reportData.metrics.h_index} tooltip="Measures both the productivity and citation impact of the publications." />
+                            <div style={{ width: "1px", height: "40px", backgroundColor: "#d9dee5ff" }}></div>
+                            <MiniStat label="i10-Index" value={reportData.metrics.i10_index} tooltip="Number of publications with at least 10 citations." />
+                            <div style={{ width: "1px", height: "40px", backgroundColor: "#d9dee5ff" }}></div>
+                            <MiniStat label="g-Index" value={reportData.metrics.g_index} tooltip="An alternative to the h-index that gives more weight to highly-cited papers." />
+                            <div style={{ width: "1px", height: "40px", backgroundColor: "#d9dee5ff" }}></div>
+                            <MiniStat label="Avg Cits" value={reportData.metrics.cpp} tooltip="Citations Per Paper (CPP). Average impact of each work." />
+                        </div>
+                    </div>
+                    <div style={{ backgroundColor: "white", borderRadius: "12px", border: "1px solid #E2E8F0", padding: "24px", boxShadow: "0 1px 2px rgba(0,0,0,0.02)" }}>
+                        <div style={{ fontSize: "12px", fontWeight: "700", color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "20px", display: "flex", alignItems: "center", gap: "5px" }}>
+                          <Zap size={14} color="#3EA2DB" /> Impact Markers
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between" }}>
+                            <MiniStat 
+                              label="Network" 
+                              value={`${reportData.metrics.network_size}+`} 
+                              sub="Unique Co-Authors" 
+                              color="#3EA2DB" 
+                              tooltip="Estimated unique co-authors based on processed publication history. Truncated at 100 entries."
+                            />
+                            <div style={{ width: "1px", height: "40px", backgroundColor: "#d9dee5ff" }}></div>
+                            <MiniStat 
+                              label="Authorship Role" 
+                              value={`${reportData.metrics.leadership_score}%`} 
+                              sub="First/Solo Author" 
+                              color="#3EA2DB" 
+                              tooltip="Percentage of papers where the researcher is 1st or solo author."
+                            />
+                            <div style={{ width: "1px", height: "40px", backgroundColor: "#d9dee5ff" }}></div>
+                            <MiniStat 
+                              label="Citation Share" 
+                              value={`${reportData.metrics.one_hit}%`} 
+                              sub="from Top Paper" 
+                              color="#3EA2DB" 
+                              tooltip="How much total impact is dependent on the single highest-cited paper."
+                            />
+                        </div>
+                    </div>
+                  </div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(400px, 1fr))", gap: "20px", marginBottom: "32px" }}>
                     <div style={{ padding: "20px", backgroundColor: "white", borderRadius: "12px", border: "1px solid #E2E8F0", boxShadow: "0 1px 2px rgba(0,0,0,0.02)" }}>
                         <ContributionChart papers={reportData.papers || []} />
@@ -292,20 +438,8 @@ export default function GenerateReport() {
                         <ProductivityChart papers={reportData.papers || []} />
                     </div>
                   </div>
-
-                  <h3 style={{ fontSize: "13px", fontWeight: "700", color: "#64748B", marginBottom: "12px", textTransform: "uppercase", letterSpacing: "0.05em" }}>Performance Indices</h3>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: "16px", marginBottom: "60px" }}>
-                      <DetailCard label="H-Index" value={reportData.metrics.h_index} icon={<Hash size={18} color="#0F172A"/>} />
-                      <DetailCard label="i10-Index" value={reportData.metrics.i10_index} icon={<Hash size={18} color="#0F172A"/>} />
-                      <DetailCard label="g-Index" value={reportData.metrics.g_index} icon={<Hash size={18} color="#0F172A"/>} />
-                      <DetailCard label="Avg Cits/Paper" value={reportData.metrics.cpp} icon={<TrendingUp size={18} color="#64748B"/>} />
-                      <DetailCard label="Network Size" value={`${reportData.metrics.network_size}+`} icon={<Users size={18} color="#EA580C"/>} sub="Co-authors" />
-                      <DetailCard label="Leadership" value={`${reportData.metrics.leadership_score}%`} icon={<Award size={18} color="#D97706"/>} sub="1st/Solo" />
-                      <DetailCard label="One-Hit Wonder" value={`${reportData.metrics.one_hit}%`} icon={<Zap size={18} color="#EF4444"/>} sub="Top dependency" />
-                  </div>
               </div>
             )}
-
             {activeTab === "publications" && (
                 <div className="animate-fade-in">
                     <PublicationAnalytics papers={reportData.papers || []} />
@@ -315,37 +449,43 @@ export default function GenerateReport() {
           </div>
         )}
 
-        {/* MODAL */}
-        {isModalOpen && (
-          <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0, 0, 0, 0.4)", backdropFilter: "blur(2px)", zIndex: 1000, display: "flex", justifyContent: "center", alignItems: "center" }} className="animate-fade-in">
-            <div style={{ backgroundColor: "white", borderRadius: "16px", width: "450px", boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)", overflow: "hidden" }}>
-              <div style={{ padding: "20px 24px", borderBottom: "1px solid #E2E8F0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <h2 style={{ fontSize: "16px", fontWeight: "700", color: "#0F172A" }}>Save to History</h2>
-                    <button onClick={() => setIsModalOpen(false)} style={{ background: "none", border: "none", cursor: "pointer", color: "#94A3B8" }}><X size={20} /></button>
+        {isModalOpen && reportData && (
+          <div 
+            onClick={handleCloseModal} // Close on background click
+            style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0, 0, 0, 0.4)", backdropFilter: "blur(4px)", zIndex: 1000, display: "flex", justifyContent: "center", alignItems: "center" }}
+          >
+            <div 
+              onClick={(e) => e.stopPropagation()} // Prevent closing when clicking inside content
+              style={{ backgroundColor: "white", borderRadius: "16px", width: "400px", boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.25)", overflow: "hidden", border: "1px solid #E2E8F0" }}
+            >
+              <div style={{ padding: "16px 20px", borderBottom: "1px solid #F1F5F9", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <h2 style={{ fontSize: "14px", fontWeight: "700", color: "#0F172A" }}>Save to History</h2>
+                    <button onClick={handleCloseModal} style={{ background: "none", border: "none", cursor: "pointer", color: "#94A3B8", padding: "4px" }}><X size={18} /></button>
               </div>
-              <div style={{ padding: "24px" }}>
-                <div style={{ display: "flex", gap: "12px", alignItems: "center", marginBottom: "24px" }}>
-                    <div style={{ width: "42px", height: "42px", borderRadius: "50%", backgroundColor: "#0F172A", color: "white", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: "700", fontSize: "18px" }}>{reportData.profile.name.charAt(0)}</div>
-                    <div>
-                        <div style={{ fontWeight: "700", color: "#0F172A", fontSize: "14px" }}>{reportData.profile.name}</div>
-                        <div style={{ fontSize: "12px", color: "#64748B" }}>{reportData.profile.affiliations?.substring(0, 40)}...</div>
-                    </div>
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "10px", marginBottom: "24px", padding: "16px", backgroundColor: "#F8FAFC", borderRadius: "12px" }}>
-                    <span style={{ fontSize: "11px", fontWeight: "700", color: "#94A3B8", textTransform: "uppercase" }}>Your Rating</span>
-                    <div style={{ display: "flex", gap: "10px" }}>
+              <div style={{ padding: "20px" }}>
+                <div style={{ textAlign: "center", marginBottom: "20px" }}>
+                    <p style={{ fontSize: "13px", color: "#64748B", marginBottom: "8px" }}>How would you rate this profile?</p>
+                    <div style={{ display: "flex", justifyContent: "center", gap: "6px" }}>
                         {[1, 2, 3, 4, 5].map((star) => (
-                            <Star key={star} size={28} fill={(hoverRating || rating) >= star ? "#0F172A" : "transparent"} color={(hoverRating || rating) >= star ? "#0F172A" : "#CBD5E1"} onClick={() => setRating(star)} onMouseEnter={() => setHoverRating(star)} onMouseLeave={() => setHoverRating(0)} style={{ cursor: "pointer" }} />
+                            <Star key={star} size={24} fill={(hoverRating || rating) >= star ? "#f5bb0bff" : "transparent"} color={(hoverRating || rating) >= star ? "#f5bb0bff" : "#CBD5E1"} onClick={() => setRating(star)} onMouseEnter={() => setHoverRating(star)} onMouseLeave={() => setHoverRating(0)} style={{ cursor: "pointer" }} />
                         ))}
                     </div>
                 </div>
-                <div style={{ marginBottom: "24px" }}>
-                    <label style={{ display: "block", fontSize: "13px", fontWeight: "600", color: "#0F172A", marginBottom: "8px" }}>Notes</label>
-                    <textarea value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Add a personal note..." style={{ width: "100%", height: "90px", padding: "12px", borderRadius: "8px", border: "1px solid #E2E8F0", fontSize: "14px", fontFamily: "inherit", boxSizing: "border-box", resize: "none", outline: "none" }} />
+                <div style={{ marginBottom: "20px" }}>
+                    <textarea 
+                        value={comment} 
+                        onChange={(e) => setComment(e.target.value)} 
+                        placeholder="Add a private note (optional)..." 
+                        maxLength={250}
+                        style={{ width: "100%", height: "80px", padding: "12px", borderRadius: "10px", border: "1px solid #E2E8F0", fontSize: "13px", fontFamily: "inherit", boxSizing: "border-box", resize: "none", outline: "none", backgroundColor: "#F8FAFC" }} 
+                    />
+                    <div style={{ textAlign: "right", fontSize: "11px", color: "#94A3B8", marginTop: "4px" }}>
+                        {250 - comment.length} characters remaining
+                    </div>
                 </div>
-                <div style={{ display: "flex", gap: "12px" }}>
-                    <button onClick={() => setIsModalOpen(false)} style={{ flex: 1, padding: "12px", borderRadius: "8px", border: "1px solid #E2E8F0", background: "white", fontSize: "14px", fontWeight: "600", color: "#64748B", cursor: "pointer" }}>Cancel</button>
-                    <button onClick={handleConfirmSave} style={{ flex: 1, padding: "12px", borderRadius: "8px", background: "#0F172A", color: "white", border: "none", fontSize: "14px", fontWeight: "600", cursor: "pointer" }}>Save</button>
+                <div style={{ display: "flex", gap: "10px" }}>
+                    <button onClick={handleCloseModal} style={{ flex: 1, padding: "10px", borderRadius: "10px", border: "1px solid #E2E8F0", background: "white", fontSize: "13px", fontWeight: "600", color: "#64748B", cursor: "pointer" }}>Cancel</button>
+                    <button onClick={handleConfirmSave} style={{ flex: 1, padding: "10px", borderRadius: "10px", background: "#0F172A", color: "white", border: "none", fontSize: "13px", fontWeight: "600", cursor: "pointer" }}>Save Profile</button>
                 </div>
               </div>
             </div>
@@ -357,7 +497,6 @@ export default function GenerateReport() {
 }
 
 // --- HELPERS ---
-
 function timeAgo(dateString) {
     if (!dateString) return "Unknown date"; 
     let date = new Date(dateString);
@@ -381,22 +520,43 @@ function timeAgo(dateString) {
     return "Just now";
 }
 
-// --- COMPONENTS ---
-
-function SavedProfileCard({ profile, onClick }) {
-    const initials = profile.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
+function MiniStat({ label, value, sub, color, tooltip, labelTransform = "uppercase" }) {
     return (
-        <div onClick={onClick} style={{ backgroundColor: "white", padding: "16px", borderRadius: "12px", border: "1px solid #E2E8F0", cursor: "pointer", transition: "all 0.2s ease", display: "flex", flexDirection: "column", gap: "10px", boxShadow: "0 1px 2px rgba(0,0,0,0.04)" }} onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#0F172A"; e.currentTarget.style.transform = "translateY(-2px)"; }} onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#E2E8F0"; e.currentTarget.style.transform = "translateY(0)"; }}>
-            <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
-                <div style={{ width: "36px", height: "36px", borderRadius: "50%", backgroundColor: "#F1F5F9", color: "#0F172A", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: "700", fontSize: "13px" }}>{initials}</div>
-                <h4 style={{ fontSize: "14px", fontWeight: "700", color: "#0F172A" }}>{profile.name}</h4>
-            </div>
-            <p style={{ fontSize: "12px", color: "#64748B", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{profile.affiliations || "Unknown affiliation"}</p>
-            <div style={{ display: "flex", gap: "8px" }}>
-                 <div style={{ display: "flex", alignItems: "center", gap: "6px", padding: "4px 8px", backgroundColor: "#F8FAFC", borderRadius: "6px" }}><Hash size={12} color="#0F172A" /><span style={{ fontSize: "13px", fontWeight: "700" }}>{profile.h_index}</span></div>
-                 <div style={{ display: "flex", alignItems: "center", gap: "6px", padding: "4px 8px", backgroundColor: "#F8FAFC", borderRadius: "6px" }}><TrendingUp size={12} color="#0F172A" /><span style={{ fontSize: "13px", fontWeight: "700" }}>{profile.total_c}</span></div>
-            </div>
+      <div style={{ 
+        display: "flex", 
+        flexDirection: "column", 
+        alignItems: "center", 
+        justifyContent: "center",
+        flex: 1,               
+        gap: "4px" 
+      }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "5px", width: "100%" }}>
+          <span style={{ 
+            fontSize: "12px", 
+            fontWeight: "700", 
+            color: "#64748B", 
+            textTransform: labelTransform,
+            letterSpacing: "0.02em"
+          }}>
+            {label}
+          </span>
+          {tooltip && <Tooltip text={tooltip} />}
         </div>
+        <span style={{ fontSize: "22px", fontWeight: "800", color: color || "#0F172A", lineHeight: "1.2" }}>
+          {value}
+        </span>
+        {sub && (
+          <span style={{ 
+            fontSize: "11px", 
+            color: "#94A3B8", 
+            fontWeight: "500", 
+            textAlign: "center",
+            marginTop: "-3px"
+          }}>
+            {sub}
+          </span>
+        )}
+      </div>
     );
 }
 
@@ -413,229 +573,38 @@ function StepCard({ num, title, text, icon }) {
   );
 }
 
-function HeroCard({ type, label, value, icon, sub, tooltip }) {
-  const styles = { success: { border: "#059669", bg: "#ECFDF5", text: "#065F46" }, primary: { border: "#0F172A", bg: "#F1F5F9", text: "#0F172A" }, warning: { border: "#D97706", bg: "#FFFBEB", text: "#92400E" } };
+function SavedProfileCard({ profile, onClick }) {
+    const initials = profile.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
+    return (
+        <div onClick={onClick} style={{ backgroundColor: "white", padding: "16px", borderRadius: "12px", border: "1px solid #E2E8F0", cursor: "pointer", transition: "all 0.2s ease", display: "flex", flexDirection: "column", gap: "10px", boxShadow: "0 1px 2px rgba(0,0,0,0.04)" }} onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#0F172A"; e.currentTarget.style.transform = "translateY(-2px)"; }} onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#E2E8F0"; e.currentTarget.style.transform = "translateY(0)"; }}>
+            <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                <div style={{ width: "36px", height: "36px", borderRadius: "50%", backgroundColor: "#F1F5F9", color: "#0F172A", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: "700", fontSize: "13px" }}>{initials}</div>
+                <h4 style={{ fontSize: "14px", fontWeight: "700", color: "#0F172A" }}>{profile.name}</h4>
+            </div>
+            <p style={{ fontSize: "12px", color: "#64748B", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{profile.affiliations || "Unknown affiliation"}</p>
+            <div style={{ display: "flex", gap: "8px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px", padding: "4px 8px", backgroundColor: "#F8FAFC", borderRadius: "6px" }}><Hash size={12} color="#0F172A" /><span style={{ fontSize: "13px", fontWeight: "700" }}>{profile.h_index}</span></div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px", padding: "4px 8px", backgroundColor: "#F8FAFC", borderRadius: "6px" }}><TrendingUp size={12} color="#0F172A" /><span style={{ fontSize: "13px", fontWeight: "700" }}>{profile.total_c}</span></div>
+            </div>
+        </div>
+    );
+}
+
+function HeroCard({ type, label, value, icon, sub }) {
+  const styles = { success: { border: "#044168", bg: "#ECFDF5", text: "#065F46" }, primary: { border: "#044168", bg: "#2b725b11", text: "#2b725cff" }, warning: { border: "#044168", bg: "#efefee8f", text: "#757575ff" } };
   const theme = styles[type] || styles.primary;
   return (
     <div style={{ backgroundColor: "white", padding: "16px 20px", borderRadius: "10px", border: "1px solid #E2E8F0", borderTop: `4px solid ${theme.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
       <div>
          <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
            <span style={{ fontSize: "12px", fontWeight: "700", color: "#64748B", textTransform: "uppercase" }}>{label}</span>
-           {tooltip && <HelpCircle size={12} color="#CBD5E1" />}
          </div>
          <div style={{ display: "flex", alignItems: "baseline", gap: "8px" }}>
             <span style={{ fontSize: "30px", fontWeight: "800", color: "#0F172A" }}>{value}</span>
-            {sub && <span style={{ fontSize: "12px", fontWeight: "600", color: theme.text, backgroundColor: theme.bg, padding: "2px 6px", borderRadius: "4px" }}>{sub}</span>}
+            {sub && <span style={{ fontSize: "12px", fontWeight: "550", color: theme.text, backgroundColor: theme.bg, padding: "4px 6px", borderRadius: "8px" }}>{sub}</span>}
          </div>
       </div>
       <div style={{ padding: "10px", borderRadius: "8px", backgroundColor: "#F8FAFC" }}>{icon}</div>
-    </div>
-  );
-}
-
-function DetailCard({ label, value, icon, sub }) {
-  return (
-    <div style={{ backgroundColor: "white", padding: "16px", borderRadius: "10px", border: "1px solid #E2E8F0", display: "flex", alignItems: "center", gap: "12px" }}>
-      <div style={{ padding: "8px", backgroundColor: "#F8FAFC" }}>{icon}</div>
-      <div>
-        <div style={{ fontSize: "11px", color: "#64748B", fontWeight: "600", textTransform: "uppercase" }}>{label}</div>
-        <div style={{ fontSize: "18px", fontWeight: "700", color: "#0F172A" }}>{value}</div>
-        {sub && <div style={{ fontSize: "11px", color: "#94A3B8" }}>{sub}</div>}
-      </div>
-    </div>
-  );
-}
-
-function PublicationsTable({ papers }) {
-  const [filterVenue, setFilterVenue] = useState(null);
-  const [filterType, setFilterType] = useState(null);
-  const [filterRank, setFilterRank] = useState(null);
-  const [filterRecent, setFilterRecent] = useState(false);
-  const [currentPage, setCurrentPage] = useState(1);
-  const defaultSort = { key: 'year', direction: 'desc' };
-  const [sortConfig, setSortConfig] = useState(defaultSort); 
-  const itemsPerPage = 10;
-
-  useEffect(() => { setCurrentPage(1); }, [filterVenue, filterType, filterRank, filterRecent]);
-
-  const venueStats = useMemo(() => {
-    const counts = {};
-    const cleanVenue = (rawName) => {
-        if (!rawName || rawName === "Unknown") return null;
-        return rawName.replace(/\s+\d+.*$/, '').trim();
-    };
-    papers.forEach(p => {
-      const originalName = p.venue || "Unknown";
-      const cleanName = cleanVenue(originalName);
-      if (cleanName && cleanName !== "Unknown") { counts[cleanName] = (counts[cleanName] || 0) + 1; }
-    });
-    return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name, count]) => ({ name, count }));
-  }, [papers]);
-
-  const showVenueFilter = venueStats.length > 0 && venueStats[0].count > 1;
-
-  const filteredPapers = useMemo(() => {
-    return papers.filter(p => {
-      if (filterVenue) {
-          const pVenueClean = (p.venue || "").replace(/\s+\d+.*$/, '').trim();
-          if (pVenueClean !== filterVenue) return false;
-      }
-      if (filterType) {
-          const t = (p.venue_type || "").toLowerCase();
-          if (filterType === 'Journal' && !t.includes('journal')) return false;
-          if (filterType === 'Conference' && !t.includes('conference') && !t.includes('proceeding')) return false;
-      }
-      if (filterRank) {
-          const r = (p.rank || "").toUpperCase();
-          if (!r.includes(filterRank)) return false;
-      }
-      if (filterRecent) {
-          const currentYear = new Date().getFullYear();
-          const pYear = parseInt(p.year);
-          if (!pYear || currentYear - pYear > 5) return false;
-      }
-      return true;
-    });
-  }, [papers, filterVenue, filterType, filterRank, filterRecent]);
-
-  const sortedPapers = useMemo(() => {
-    let data = [...filteredPapers];
-    if (sortConfig.key) {
-      data.sort((a, b) => {
-        let aVal = a[sortConfig.key];
-        let bVal = b[sortConfig.key];
-        if (sortConfig.key === 'author_pos') {
-            if (aVal === '1st') aVal = 1; else if (aVal === 'Last') aVal = 999; else aVal = parseInt(aVal) || 99;
-            if (bVal === '1st') bVal = 1; else if (bVal === 'Last') bVal = 999; else bVal = parseInt(bVal) || 99;
-        } else if (sortConfig.key === 'citations' || sortConfig.key === 'year') {
-            aVal = Number(aVal) || 0; bVal = Number(bVal) || 0;
-        } else {
-            aVal = (aVal || "").toString().toLowerCase(); bVal = (bVal || "").toString().toLowerCase();
-        }
-        if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
-        if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
-        return 0;
-      });
-    }
-    return data;
-  }, [filteredPapers, sortConfig]);
-
-  const displayedPapers = useMemo(() => {
-    const start = (currentPage - 1) * itemsPerPage;
-    return sortedPapers.slice(start, start + itemsPerPage);
-  }, [sortedPapers, currentPage]);
-
-  const totalPages = Math.ceil(sortedPapers.length / itemsPerPage);
-
-  const requestSort = (key) => {
-    let direction = 'desc';
-    if (sortConfig.key === key) {
-        if (sortConfig.direction === 'desc') { direction = 'asc'; } else { setSortConfig(defaultSort); return; }
-    }
-    setSortConfig({ key, direction });
-  };
-
-  const clearAllFilters = () => {
-      setFilterVenue(null); setFilterType(null); setFilterRank(null); setFilterRecent(false); setSortConfig(defaultSort);
-  };
-
-  const getSortIcon = (key) => {
-    if (sortConfig.key !== key) return <ArrowUpDown size={12} color="#CBD5E1" />;
-    if (sortConfig.direction === 'asc') return <ArrowUp size={12} color="#0F172A" />;
-    return <ArrowDown size={12} color="#0F172A" />;
-  };
-
-  const FilterSection = ({ title, children }) => (
-      <div style={{ marginBottom: "20px" }}>
-          <div style={{ fontSize: "11px", fontWeight: "700", color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>{title}</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>{children}</div>
-      </div>
-  );
-
-  const CheckboxRow = ({ label, count, checked, onClick }) => (
-      <div onClick={onClick} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 8px", borderRadius: "6px", cursor: "pointer", backgroundColor: checked ? "#F1F5F9" : "transparent", color: checked ? "#0F172A" : "#475569", fontSize: "13px", fontWeight: checked ? "600" : "400" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <div style={{ width: "14px", height: "14px", borderRadius: "3px", border: checked ? "1px solid #0F172A" : "1px solid #CBD5E1", backgroundColor: checked ? "#0F172A" : "white", display: "flex", alignItems: "center", justifyContent: "center" }}>{checked && <Check size={10} color="white" strokeWidth={4} />}</div>
-              <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "140px" }}>{label}</span>
-          </div>
-          {count !== undefined && <span style={{ fontSize: "10px", color: "#94A3B8" }}>{count}</span>}
-      </div>
-  );
-
-  return (
-    <div style={{ display: "flex", gap: "32px", alignItems: "flex-start" }}>
-      <div style={{ width: "200px", flexShrink: 0, position: "sticky", top: "20px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
-          <div style={{ fontSize: "12px", fontWeight: "700", color: "#0F172A" }}>Filters</div>
-          {(filterVenue || filterType || filterRank || filterRecent) && (
-            <button onClick={clearAllFilters} style={{ border: "none", background: "none", color: "#EF4444", fontSize: "11px", fontWeight: "600", cursor: "pointer", display: "flex", alignItems: "center", gap: "3px" }}><RotateCcw size={10} /> Reset</button>
-          )}
-        </div>
-        {showVenueFilter && (
-            <FilterSection title="Top Venues">
-                {venueStats.map((venue) => (
-                    <CheckboxRow key={venue.name} label={venue.name} count={venue.count} checked={filterVenue === venue.name} onClick={() => setFilterVenue(filterVenue === venue.name ? null : venue.name)} />
-                ))}
-            </FilterSection>
-        )}
-        <FilterSection title="Type">
-            <CheckboxRow label="Journal" checked={filterType === 'Journal'} onClick={() => setFilterType(filterType === 'Journal' ? null : 'Journal')} />
-            <CheckboxRow label="Conference" checked={filterType === 'Conference'} onClick={() => setFilterType(filterType === 'Conference' ? null : 'Conference')} />
-        </FilterSection>
-        <FilterSection title="Impact Tier">
-            <CheckboxRow label="Q1 Journal" checked={filterRank === 'Q1'} onClick={() => setFilterRank(filterRank === 'Q1' ? null : 'Q1')} />
-            <CheckboxRow label="A* Conference" checked={filterRank === 'A*'} onClick={() => setFilterRank(filterRank === 'A*' ? null : 'A*')} />
-        </FilterSection>
-        <FilterSection title="Timeframe">
-            <CheckboxRow label="Last 5 Years" checked={filterRecent} onClick={() => setFilterRecent(!filterRecent)} />
-        </FilterSection>
-      </div>
-
-      <div style={{ flex: 1 }}>
-        <div style={{ display: "flex", alignItems: "center", padding: "0 16px 12px", borderBottom: "2px solid #E2E8F0", position: "relative" }}>
-            <div style={{ flex: 1, fontSize: "11px", fontWeight: "700", color: "#64748B", textTransform: "uppercase", cursor: "pointer", display: "flex", alignItems: "center", gap: "6px" }} onClick={() => requestSort('title')}>Publication Details {getSortIcon('title')}</div>
-            <div style={{ width: "100px", textAlign: "center", fontSize: "11px", fontWeight: "700", color: "#64748B", textTransform: "uppercase", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "4px" }} onClick={() => requestSort('rank')}>Rank {getSortIcon('rank')}</div>
-            <div style={{ width: "120px", textAlign: "center", fontSize: "11px", fontWeight: "700", color: "#64748B", textTransform: "uppercase", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "4px" }} onClick={() => requestSort('author_pos')}>Author Pos {getSortIcon('author_pos')}</div>
-            <div style={{ width: "80px", textAlign: "right", fontSize: "11px", fontWeight: "700", color: "#64748B", textTransform: "uppercase", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "4px" }} onClick={() => requestSort('citations')}>Cits {getSortIcon('citations')}</div>
-        </div>
-        <div style={{ display: "flex", flexDirection: "column" }}>
-            {displayedPapers.length === 0 ? (
-                <div style={{ padding: "40px", textAlign: "center", color: "#94A3B8", fontSize: "14px" }}>No publications found matching these filters.</div>
-            ) : (
-                displayedPapers.map((paper, idx) => (
-                    <div key={idx} style={{ display: "flex", alignItems: "center", padding: "16px 16px", borderBottom: "1px solid #F1F5F9" }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "white"} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "transparent"}>
-                        <div style={{ flex: 1, paddingRight: "24px" }}>
-                            <div style={{ fontSize: "15px", fontWeight: "600", color: "#1E293B", lineHeight: "1.4", marginBottom: "4px" }}>{paper.title}</div>
-                            <div style={{ fontSize: "12px", color: "#64748B", display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                                <span style={{ fontWeight: "500", color: "#475569" }}>{paper.year}</span>
-                                <span style={{ width: "3px", height: "3px", backgroundColor: "#CBD5E1", borderRadius: "50%" }}></span>
-                                <span style={{ fontStyle: "italic" }}>{paper.venue || "Unknown Venue"}</span>
-                                <span style={{ textTransform: "capitalize", backgroundColor: "#F1F5F9", padding: "1px 6px", borderRadius: "4px" }}>{paper.venue_type || "Article"}</span>
-                            </div>
-                        </div>
-                        <div style={{ width: "100px", display: "flex", justifyContent: "center" }}>
-                            {paper.rank ? (
-                                <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: "6px", fontSize: "11px", fontWeight: "700", textAlign: "center", minWidth: "36px", backgroundColor: paper.rank.includes("Q1") || paper.rank.includes("A*") ? "#F1F5F9" : "#FFFBEB", color: "#0F172A", border: "1px solid #E2E8F0" }}>{paper.rank}</span>
-                            ) : (<span style={{ fontSize: "16px", color: "#E2E8F0" }}>-</span>)}
-                        </div>
-                        <div style={{ width: "120px", display: "flex", justifyContent: "center" }}>
-                            <span style={{ fontSize: "12px", fontWeight: "600", padding: "2px 10px", borderRadius: "20px", color: "#0F172A", border: "1px solid #E2E8F0" }}>{paper.author_pos || "-"}</span>
-                        </div>
-                        <div style={{ width: "80px", textAlign: "right" }}><span style={{ fontSize: "14px", fontWeight: "700", color: "#334155" }}>{paper.citations || 0}</span></div>
-                    </div>
-                ))
-            )}
-        </div>
-        {totalPages > 1 && (
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "30px", borderTop: "1px solid #E2E8F0", paddingTop: "16px" }}>
-                <div style={{ fontSize: "12px", color: "#64748B" }}>Page <span style={{ fontWeight: "600", color: "#0F172A" }}>{currentPage}</span> of {totalPages}</div>
-                <div style={{ display: "flex", gap: "8px" }}>
-                    <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} style={{ padding: "6px 12px", borderRadius: "6px", border: "1px solid #E2E8F0", backgroundColor: "white", cursor: currentPage === 1 ? "not-allowed" : "pointer", fontSize: "12px" }}>Previous</button>
-                    <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} style={{ padding: "6px 12px", borderRadius: "6px", border: "1px solid #E2E8F0", backgroundColor: "white", cursor: currentPage === totalPages ? "not-allowed" : "pointer", fontSize: "12px" }}>Next</button>
-                </div>
-            </div>
-        )}
-      </div>
     </div>
   );
 }

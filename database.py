@@ -1,9 +1,12 @@
 import os
-import re
-from sqlalchemy import create_engine, Table, Column, Integer, Float, String, Text, ForeignKey, MetaData, DateTime
+from sqlalchemy import create_engine, Table, Column, Integer, Float, String, Text, ForeignKey, MetaData, DateTime, text
 from sqlalchemy.dialects.postgresql import JSONB, insert
 from dotenv import load_dotenv
 from datetime import datetime, timezone
+import pandas as pd
+import re
+import string
+import numpy as np
 
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -165,76 +168,134 @@ def update_publication_venues(author_id: str, df):
                 )
             )
 
+# --- uploadButton addition ---
+
 def update_quality_list_in_db(df, list_type, mode="replace"):
     """
-    Updates the journals_quality or conferences_quality table from a dataframe.
+    Updates the journals_quality or conferences_quality table using smart column detection.
     """
-    # Select Target Table
+    
+    # --- LOGIC PORTED FROM SCRIPT ---
+    
+    def normalize_text(s):
+        if not isinstance(s, str): return ""
+        s = str(s).lower()
+        s = re.sub(r'\(.*?\)', '', s)
+        s = re.sub(r'\[.*?\]', '', s)
+        s = s.replace("-", " ").replace("–", " ")
+        s = re.sub(r'\b(19|20)\d{2}\b', '', s)
+        s = re.sub(r'\b\d+(st|nd|rd|th)\b', '', s)
+        s = re.sub(r'\b(pp|vol|no|issue)\.?\s*\d+', '', s)
+        s = re.sub(r'\b\d+\b', '', s)
+        s = s.translate(str.maketrans("", "", string.punctuation))
+        return re.sub(r"\s+", " ", s).strip()
+
+    def get_latest_rank_dynamic(row):
+        valid_cols = [c for c in row.index if pd.notna(row[c]) and str(row[c]).strip() not in ["", "-", "nan", "None", "0", "0.0", "N/A", "Unranked"]]
+        candidates = []
+
+        for col in valid_cols:
+            c_lower = col.lower()
+            bad_keywords = ["code", "id", "link", "url", "h5", "index", "metric", "comment", "issn", "isbn", "name", "title", "acronym", "citescore",
+                            "sjr", "snip", "categories", "publisher", "type", "open access"]
+            if any(bad in c_lower for bad in bad_keywords):
+                continue
+
+            if any(k in c_lower for k in ["core", "icore", "era", "rank", "quartile"]):
+                years = re.findall(r'\d{4}', col)
+                year = int(years[0]) if years else 0
+                
+                if "quartile" in c_lower: bonus = 200
+                elif "core" in c_lower or "icore" in c_lower: bonus = 100
+                else: bonus = 0
+
+                candidates.append((year + bonus, col, row[col]))
+
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        if candidates: 
+            return str(candidates[0][2]).strip()
+        return "Unknown"
+
+    # --- PREPARE DATA ---
+
+    # Clean empty strings
+    df.replace(["-", "–", ""], np.nan, inplace=True)
+    
+    # Helper to safely grab a column if it exists
+    def get_col(names):
+        for n in names:
+            if n in df.columns: return df[n]
+        return None
+
     if list_type == "journal":
-        target_table = journals_quality
-    elif list_type == "conference":
-        target_table = conferences_quality
-    else:
-        raise ValueError("Invalid list_type. Must be 'journal' or 'conference'.")
-
-    # Helper to normalize titles (crucial for matching)
-    def normalize_text(text):
-        if not text or not isinstance(text, str):
-            return ""
-        # Lowercase, strip special chars, keep spaces/numbers
-        return re.sub(r'[^a-z0-9\s]', '', text.lower()).strip()
-
-    # Prepare Records
-    records = []
-    
-    # We convert keys to lowercase to make column matching easier
-    df.columns = [c.lower().strip() for c in df.columns]
-
-    for _, row in df.iterrows():
-        data = {}
+        target_table = "journals_quality"
         
-        # --- MAPPING LOGIC ---
-        if list_type == "journal":
-            # Map Title
-            title = row.get("title") or row.get("journal name") or ""
-            data["Title"] = str(title).strip()
-            data["Title_norm"] = normalize_text(title)
-            
-            # Map Rank (Look for common column names)
-            data["rank"] = str(row.get("rank") or row.get("rating") or row.get("quality") or "Unknown").strip()
-            
-            # Map ISSN (Prefer Print, fallback to E-ISSN)
-            issn = row.get("print issn") or row.get("e-issn") or row.get("issn") or ""
-            data["issn"] = str(issn).strip()
+        # Priority for Title: Title -> Journal Name -> title
+        title_col = get_col(["Title", "Journal Name", "title", "journal name"])
+        if title_col is None: 
+            # If no title column found, we can't proceed
+            return 0
+        
+        # Priority for ISSN
+        issn_col = get_col(["Print ISSN", "print issn", "ISSN", "issn"])
+        if issn_col is None:
+            issn_col = pd.Series([None] * len(df))
+        
+        # Fill E-ISSN if Print is missing
+        e_issn = get_col(["E-ISSN", "e-issn", "eissn"])
+        if e_issn is not None:
+            issn_col = issn_col.fillna(e_issn)
 
-        elif list_type == "conference":
-            # Map Title (Try DBLP name first, then ERA, then generic)
-            title = row.get("conference name (dblp)") or row.get("era conference name") or row.get("conference name") or row.get("title") or ""
-            data["Title"] = str(title).strip()
-            data["Title_norm"] = normalize_text(title)
-            
-            # Map Acronym
-            data["acronym"] = str(row.get("acronym") or "").strip()
-            
-            # Map Rank
-            data["rank"] = str(row.get("rank") or row.get("rating") or "Unknown").strip()
+        final_df = pd.DataFrame({
+            "Title": title_col,
+            "Title_norm": title_col.apply(normalize_text),
+            "rank": df.apply(get_latest_rank_dynamic, axis=1),
+            "issn": issn_col
+        })
 
-        # Only add valid rows (must have a title)
-        if data["Title"]:
-            records.append(data)
+    elif list_type == "conference":
+        target_table = "conferences_quality"
 
-    # Perform Database Operations
-    with engine.begin() as conn:
-        # If mode is 'replace', wipe the table first 
-        if mode == "replace":
-            conn.execute(target_table.delete())
-            print(f"Cleared table: {target_table.name}")
+        # Grab Primary Title Column (GS Name or DBLP or Title)
+        title_col = get_col(["GS Name", "Conference Name (DBLP)", "Title", "title"])
+        if title_col is None:
+             title_col = pd.Series([None] * len(df))
 
-        # Bulk Insert
-        if records:
-            # We insert in chunks of 1000 to be safe with limits
-            chunk_size = 1000
-            for i in range(0, len(records), chunk_size):
-                conn.execute(target_table.insert(), records[i:i + chunk_size])
+        # Fill gaps with fallback columns (chaining .fillna)
+        for fallback in ["Conference Name (DBLP)", "CORE Conference Name", "ERA Conference Name"]:
+            if fallback in df.columns:
+                title_col = title_col.fillna(df[fallback])
+
+        # Grab Primary Acronym
+        acronym_col = get_col(["Acronym", "acronym"])
+        if acronym_col is None:
+            acronym_col = pd.Series([None] * len(df))
+
+        # Fill gaps in Acronym
+        for fallback in ["Acronym (DBLP)", "ERA Acronym"]:
+            if fallback in df.columns:
+                acronym_col = acronym_col.fillna(df[fallback])
+
+        final_df = pd.DataFrame({
+            "Title": title_col,
+            "Title_norm": title_col.apply(normalize_text),
+            "acronym": acronym_col.astype(str).str.lower().replace("nan", ""),
+            "rank": df.apply(get_latest_rank_dynamic, axis=1)
+        })
+
+    # Filter out invalid rows (where Title didn't exist or normalized to empty)
+    final_df = final_df[final_df["Title_norm"] != ""]
     
-    return len(records)
+    # Final cleanup for SQL (convert NaN to None)
+    final_df = final_df.where(pd.notnull(final_df), None)
+
+    # --- DATABASE INSERT ---
+    from database import engine 
+
+    with engine.begin() as conn:
+        if mode == "replace":
+            conn.execute(text(f"DELETE FROM {target_table}"))
+        
+        final_df.to_sql(target_table, conn, if_exists="append", index=False)
+        
+    return len(final_df)

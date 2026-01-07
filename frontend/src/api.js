@@ -1,6 +1,5 @@
 import axios from "axios";
 
-// points to the python backend
 const API_BASE_URL = "http://127.0.0.1:8000";
 
 export const api = axios.create({
@@ -10,8 +9,18 @@ export const api = axios.create({
   },
 });
 
-// function to trigger analysis
+// START analysis (async job)
 export const analyzeProfile = async (url, forceRefresh = false) => {
-  const response = await api.post("/analyze", { url, is_cs_ai: true, forceRefresh: forceRefresh });
+  const response = await api.post("/analyze/start", {
+    url,
+    is_cs_ai: true,
+    forceRefresh: forceRefresh,
+  });
+  return response.data; // { job_id }
+};
+
+// CHECK job status
+export const getAnalysisStatus = async (jobId) => {
+  const response = await api.get(`/analyze/status/${jobId}`);
   return response.data;
 };
